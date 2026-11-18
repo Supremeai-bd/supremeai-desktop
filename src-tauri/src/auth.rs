@@ -74,6 +74,18 @@ pub fn seed_user_session(state: &UserSessionState, session: UserSession) {
     }
 }
 
+/// Access token for native-side calls that must be authenticated.
+///
+/// Only Rust reads this: the token is never serialised to the WebView, which is
+/// why the feedback command (src-tauri/src/feedback.rs) submits from here.
+pub fn current_access_token(state: &UserSessionState) -> Option<String> {
+    state
+        .session
+        .lock()
+        .ok()
+        .and_then(|current| current.as_ref().map(|session| session.access_token.clone()))
+}
+
 pub fn load_persisted_user_session(app: &AppHandle, state: &UserSessionState) {
     let Some(path) = config_dir_file(app, USER_SESSION_FILE) else { return };
     let Ok(bytes) = std::fs::read(&path) else { return };

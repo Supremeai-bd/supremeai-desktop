@@ -37,3 +37,34 @@ jobs:
 
       - name: Typecheck & build
         run: npm run build
+
+  rust:
+    name: "Rust compile (Tauri backend)"
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> src-tauri/target"
+
+      # tauri::generate_context! embeds the built frontend, so dist/ must exist
+      # before the Rust crate is compiled.
+      - name: Install dependencies & build frontend
+        run: npm ci && npm run build
+
+      - name: Compile Rust backend
+        run: cargo build --manifest-path src-tauri/Cargo.toml

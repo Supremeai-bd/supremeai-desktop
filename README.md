@@ -24,6 +24,19 @@ Native **Windows, macOS, and Linux** desktop workstation for **SupremeAI**, buil
 
 ---
 
+## 🌐 Languages & In-App Feedback
+
+- **English (default) and বাংলা (bn-BD)** across the whole desktop shell: sidebar, welcome screen, chat, composer, command palette, sign-in and quick-lock, settings.
+- The language switcher lives in two places, matching the web workspace:
+  - a compact **EN | বাং** toggle in the sidebar footer;
+  - the full picker in **Settings** (`⌘ ,` / the gear button in the sidebar footer), with the same option labels and descriptions as the web app.
+- The choice persists per device (`supremeai.desktop.lang.v1` in localStorage) and sets `<html lang>` so Bengali typography (taller glyphs, more line-height, Windows *Nirmala UI* / *Hind Siliguri* fallbacks) kicks in automatically.
+- **Feedback / product pulse**: auto-surfaces after 4 user messages, with snooze (3 days), submit cooldown (14 days) and "don't ask" — the same cadence, ratings and wording as the web widget. Submissions go through the native `submit_feedback` command, which posts `{event_type, payload.context}` to the gateway's authenticated `/api/feedback/ingest` endpoint using the signed-in session token. The token never enters the WebView.
+
+Translations live in `src/i18n/en.ts` (canonical key set) and `src/i18n/bn.ts` (typed against `TranslationKeys`, so a missing Bengali key is a compile error rather than a silent English fallback).
+
+---
+
 ## 🛠️ Architecture & Tech Stack
 
 | Layer | Technology |

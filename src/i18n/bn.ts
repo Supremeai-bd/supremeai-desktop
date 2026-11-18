@@ -1,0 +1,184 @@
+/**
+ * Bangla (bn-BD) UI dictionary.
+ *
+ * Typed against `TranslationKeys`, so a missing or misspelled key is a compile
+ * error rather than a silent English fallback. Wording follows
+ * `supremeai-frontend/src/locales/bn.ts` so the desktop and web surfaces read
+ * the same in Bangla.
+ */
+
+import type { TranslationKeys } from './en';
+
+export const BN_DICT: Record<TranslationKeys, string> = {
+  // Shell / sidebar
+  appKicker: 'ইন্টেলিজেন্স ওয়ার্কস্পেস',
+  mainNavigation: 'প্রধান নেভিগেশন',
+  collapseSidebar: 'সাইডবার গুটিয়ে ফেলুন',
+  openSidebar: 'সাইডবার খুলুন',
+  personalWorkspace: 'ব্যক্তিগত ওয়ার্কস্পেস',
+  guestSession: 'গেস্ট সেশন',
+  workspaceSection: 'ওয়ার্কস্পেস',
+  newChat: 'নতুন চ্যাট',
+  searchChats: 'চ্যাট খুঁজুন',
+  projects: 'প্রজেক্টস',
+  deepResearch: 'ডিপ রিসার্চ',
+  agentActivity: 'এজেন্ট অ্যাক্টিভিটি',
+  adminConsole: 'অ্যাডমিন কনসোল',
+  settings: 'সেটিংস',
+  projectsPlanned: 'প্রজেক্টস পরবর্তী বিল্ড মাইলস্টোনে আসবে',
+  researchNotConnected: 'এই প্রথম বিল্ডে রিসার্চ ওয়ার্কফ্লো সংযুক্ত নয়',
+  towerNotConnected: 'এই প্রথম বিল্ডে Tower এজেন্ট কন্ট্রোল সংযুক্ত নয়',
+  soon: 'শীঘ্রই',
+
+  // History
+  recentChats: 'সাম্প্রতিক চ্যাট',
+  filterConversations: 'কথোপকথন ফিল্টার করুন',
+  noMatchingConversations: 'মিলে যাওয়া কোনো কথোপকথন নেই।',
+  emptyHistory: 'আপনার কথোপকথন এখানে দেখা যাবে।',
+  doubleClickToRename: 'নাম বদলাতে ডাবল-ক্লিক করুন',
+  exportConversation: 'কথোপকথন এক্সপোর্ট করুন',
+  renameConversation: 'কথোপকথনের নাম বদলান',
+  deleteConversation: 'কথোপকথন মুছুন',
+  actionsFor: '{title} — অ্যাকশন',
+  ageJustNow: 'এইমাত্র',
+  ageMinutes: '{n} মিনিট আগে',
+  ageHours: '{n} ঘণ্টা আগে',
+  buildCardTitle: 'প্রথম বিল্ড',
+  buildCardBody: 'চ্যাট চালু আছে। বাকি মডিউলগুলো প্রস্তুত হচ্ছে, নকল নয়।',
+
+  // Top bar
+  workspace: 'ওয়ার্কস্পেস',
+  newConversation: 'নতুন কথোপকথন',
+  statusConnected: 'সংযুক্ত',
+  statusOffline: 'অফলাইন',
+  statusGuest: 'গেস্ট মোড',
+  switchTheme: '{theme} থিমে যান',
+  themeLight: 'লাইট',
+  themeDark: 'ডার্ক',
+  startNewChat: 'নতুন চ্যাট শুরু করুন',
+
+  // Welcome
+  welcomeEyebrow: 'আপনার থিংকিং পার্টনার',
+  welcomeTitleLead: 'আজ আমরা কী',
+  welcomeTitleAccent: 'বানাচ্ছি?',
+  welcomeCopy: 'আইডিয়া, রিসার্চ আর গড়ে তোলার মতো কাজ—সব এক ওয়ার্কস্পেসে।',
+  promptResearchTitle: 'বিষয় নিয়ে গবেষণা',
+  promptResearchText: 'একটি বিষয়ে গবেষণা করে মূল তথ্যগুলো গুছিয়ে দিতে সাহায্য করুন।',
+  promptWriteTitle: 'কিছু লিখুন',
+  promptWriteText: 'একটি পরিষ্কার ও কাজে লাগার মতো প্রথম ড্রাফট লিখতে সাহায্য করুন।',
+  promptBuildTitle: 'আইডিয়া বাস্তবায়ন',
+  promptBuildText: 'একটি আইডিয়াকে বাস্তব বিল্ড প্ল্যানে রূপ দিতে সাহায্য করুন।',
+  startWithPrompt: 'একটি প্রম্পট দিয়ে শুরু করুন',
+
+  // Conversation
+  speakerYou: 'আপনি',
+  speakerAssistant: 'SUPREMEAI',
+  thinking: 'ভাবছে',
+  copy: 'কপি',
+  copied: 'কপি হয়েছে',
+  regenerate: 'আবার তৈরি করুন',
+  retryRequest: 'আবার চেষ্টা করুন',
+  responseActions: 'উত্তরের অ্যাকশন',
+  assistantFailed: 'গেটওয়ে এই অনুরোধটি সম্পূর্ণ করতে পারেনি।',
+  unknownConnectionError: 'অজানা সংযোগ সমস্যা',
+  exportUser: 'আপনি',
+  exportAssistant: 'SupremeAI',
+
+  // Composer
+  modelLabel: 'মডেল',
+  modeAutoNote: 'কাজের জন্য সবচেয়ে উপযুক্ত',
+  modeReasoningNote: 'জটিল কাজ ও পরিকল্পনা',
+  modeFastNote: 'দ্রুত দৈনন্দিন উত্তর',
+  gatewayRouted: 'গেটওয়ে-রাউটেড',
+  askPlaceholder: 'SupremeAI-কে যা কিছু জিজ্ঞাসা করুন…',
+  messageSupremeAI: 'SupremeAI-কে বার্তা লিখুন',
+  privacyNote: 'গেস্ট সেশন · হিস্টরি এই ডিভাইসেই থাকবে',
+  waitingForSupremeAI: 'SupremeAI-র জন্য অপেক্ষা করা হচ্ছে',
+  sendMessage: 'বার্তা পাঠান',
+  send: 'পাঠান',
+  working: 'চলছে',
+  disclaimer: 'SupremeAI ভুল করতে পারে। গুরুত্বপূর্ণ তথ্য যাচাই করে নিন।',
+  dismissNotice: 'সংযোগের বিবরণ বন্ধ করুন',
+
+  // Notices
+  themePrefSaveFailed: 'এই ডিভাইসে থিম পছন্দ সংরক্ষণ করা যায়নি।',
+  historySaveFailed: 'এই সেশনে লোকাল হিস্টরি সংরক্ষণ করা যায়নি।',
+  renameSaveFailed: 'নাম বদলানো চ্যাটটি এই ডিভাইসে সংরক্ষণ করা যায়নি।',
+  deleteConfirm: '“{title}” মুছে ফেলবেন?',
+  deleteSaveFailed: 'মুছে ফেলা চ্যাটটি এই ডিভাইসে সংরক্ষণ করা যায়নি।',
+  copyFailed: 'এই উত্তরটি ক্লিপবোর্ডে কপি করা যায়নি।',
+
+  // Command palette
+  commandPalette: 'কমান্ড প্যালেট',
+  newChatHint: 'নতুন কথোপকথন শুরু করুন',
+  searchChatsHint: 'শিরোনাম বা বার্তার বিষয়বস্তু দিয়ে খুঁজুন',
+  switchThemeTitle: 'থিম বদলান',
+  switchThemeHint: '{theme} ওয়ার্কস্পেস থিম ব্যবহার করুন',
+  sidebarVisibilityHint: 'ওয়ার্কস্পেস নেভিগেশনের দৃশ্যমানতা বদলান',
+  openSettings: 'সেটিংস খুলুন',
+  openSettingsHint: 'ভাষা, থিম ও ওয়ার্কস্পেস পছন্দ',
+  openFeedback: 'মতামত পাঠান',
+  openFeedbackHint: 'আপনার অভিজ্ঞতা রেট করুন ও পরামর্শ দিন',
+
+  // Settings
+  settingsTitle: 'সেটিংস',
+  settingsSubtitle: 'ভাষা, চেহারা ও ওয়ার্কস্পেস পছন্দ।',
+  languageSection: 'ভাষা',
+  languageHint: 'সাথে সাথেই পুরো ওয়ার্কস্পেসে প্রযোজ্য হবে।',
+  languageEnDesc: 'ইন্টারফেস এবং AI চ্যাট ও ভয়েস উত্তর ডিফল্টভাবে ইংরেজিতে থাকবে।',
+  languageBnDesc: 'ইন্টারফেস এবং AI চ্যাট ও ভয়েস উত্তর ডিফল্টভাবে বাংলায় থাকবে।',
+  appearanceSection: 'চেহারা',
+  themeLabel: 'থিম',
+  themeDarkOption: 'ডার্ক',
+  themeLightOption: 'লাইট',
+  aboutSection: 'সম্পর্কে',
+  versionLabel: 'ভার্সন',
+  close: 'বন্ধ করুন',
+
+  // Language switcher
+  switchLanguageTooltip: 'ভাষা পরিবর্তন করুন (EN / বাংলা)',
+
+  // Feedback
+  shareFeedbackBtn: 'মতামত দিন',
+  feedbackCardTitle: 'প্রোডাক্ট মতামত ও ফিচার পরামর্শ',
+  feedbackCardDesc: 'কোন ফিচারটি ভালো লেগেছে বা ভবিষ্যতে কী চান তা আমাদের জানান।',
+  surveyTitle: 'ছোট মতামত (Product Pulse)',
+  surveySubtitle: 'SupremeAI ব্যবহার করার অভিজ্ঞতা কেমন লাগছে?',
+  surveyThanks: 'ধন্যবাদ! আপনার মতামত সংরক্ষণ করা হয়েছে।',
+  surveyRatingGreat: 'দারুণ',
+  surveyRatingGood: 'ভালো',
+  surveyRatingOkay: 'মোটামুটি',
+  surveyRatingNeedsWork: 'উন্নতি দরকার',
+  surveyPlaceholder: 'কোনো পরামর্শ বা নতুন ফিচারের চাহিদা থাকলে লিখুন (ঐচ্ছিক)...',
+  surveyLater: 'পরে',
+  surveyDontAsk: 'আর দেখাবেন না',
+  surveySend: 'পাঠান',
+  surveySending: 'পাঠানো হচ্ছে...',
+  feedbackSignInRequired: 'মতামত পাঠাতে আপনার SupremeAI অ্যাকাউন্টে সাইন ইন করুন।',
+  feedbackError: 'এখনই মতামত পাঠানো যায়নি।',
+
+  // User session / quick lock
+  guestUser: 'গেস্ট ব্যবহারকারী',
+  sessionSaved: 'সেশন সংরক্ষিত',
+  passkeyProtected: 'পাসকি সুরক্ষিত',
+  signedInState: 'সাইন ইন করা আছে · {state}',
+  localHistoryHint: 'লোকাল চ্যাট হিস্টরি · সাইন ইন করতে ট্যাপ করুন',
+  emailLabel: 'ইমেইল',
+  passwordLabel: 'পাসওয়ার্ড',
+  signIn: 'সাইন ইন',
+  signInFailed: 'সাইন ইন ব্যর্থ হয়েছে।',
+  signingIn: 'সাইন ইন হচ্ছে…',
+  accountNote: 'SupremeAI অ্যাকাউন্ট · এই ডিভাইসে সেশন সাইন ইন থাকবে',
+  passkeyLockLabel: 'পাসকি / পিন লক:',
+  passkeyEnabledOn: 'চালু (ON)',
+  passkeyDisabledOff: 'বন্ধ (OFF)',
+  setPinPlaceholder: '৪+ সংখ্যার পিন সেট করুন',
+  savePasskeyPin: 'পাসকি পিন সংরক্ষণ করুন',
+  lockWorkspaceNow: 'এখনই ওয়ার্কস্পেস লক করুন',
+  signOut: 'সাইন আউট',
+  quickLockActive: 'কুইক-লক চালু',
+  enterPinPlaceholder: '৪+ সংখ্যার পিন দিন',
+  unlock: 'আনলক',
+  incorrectPin: 'ভুল পিন / পাসকি।',
+  pinTooShort: 'পাসকি / পিন অন্তত ৪ সংখ্যার হতে হবে।',
+};
