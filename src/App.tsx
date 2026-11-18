@@ -1,4 +1,3 @@
-import { speakText, generateLocalReply } from './companion/speechHelper';
 import HolographicHero from './companion/HolographicHero';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Channel, invoke } from '@tauri-apps/api/core';
@@ -9,11 +8,12 @@ import UserSessionPanel from './auth/UserSessionPanel';
 import FeedbackWidget from './components/FeedbackWidget';
 import LanguageToggle from './components/LanguageToggle';
 import SettingsDialog from './components/SettingsDialog';
+import { useSpeech } from './hooks/useSpeech';
 import { dateLocale, format, useI18n } from './i18n';
 import type { Dictionary } from './i18n';
 
 type Role = 'user' | 'assistant';
-type IconName = 'chat' | 'folder' | 'search' | 'flask' | 'activity' | 'settings' | 'plus' | 'clock' | 'chevron' | 'send' | 'spark' | 'panel' | 'sun' | 'close';
+type IconName = 'chat' | 'folder' | 'search' | 'flask' | 'activity' | 'settings' | 'plus' | 'clock' | 'chevron' | 'send' | 'spark' | 'panel' | 'sun' | 'close' | 'speaker' | 'stop';
 type ChatMessage = { id: string; role: Role; content: string; state?: 'loading' | 'error'; retryPrompt?: string };
 type SavedChat = { id: string; title: string; messages: ChatMessage[]; updatedAt: number };
 type ChatResult = { text: string; conversationId?: string };
@@ -38,6 +38,8 @@ const iconPaths: Record<IconName, string> = {
   panel: 'M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-13ZM14 4v16',
   sun: 'M12 3v2m0 14v2m9-9h-2M5 12H3m15.4-6.4-1.4 1.4M7 17l-1.4 1.4m12.8 0L17 17M7 7 5.6 5.6M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z',
   close: 'M18 6 6 18M6 6l12 12',
+  speaker: 'M11 5 6 9H3v6h3l5 4V5Zm4.6 3.4a5 5 0 0 1 0 7.2M18.8 5.9a9 9 0 0 1 0 12.2',
+  stop: 'M6.5 6.5h11v11h-11z',
 };
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
@@ -109,6 +111,7 @@ function IconMark() {
 
 export default function App() {
   const { t, lang, setLang } = useI18n();
+  const { speak, stop: stopSpeaking, speaking, config: voiceConfig, updateConfig: updateVoiceConfig } = useSpeech();
   const initialChats = useMemo(() => loadChats(t.newConversation), [t.newConversation]);
   const [savedChats, setSavedChats] = useState<SavedChat[]>(initialChats);
   const [conversationId, setConversationId] = useState(() => initialChats[0]?.id ?? newId());
@@ -206,6 +209,12 @@ export default function App() {
     composer.current?.focus();
   }
 
+  function toggleAutoSpeak() {
+    updateVoiceConfig({ autoSpeak: !voiceConfig.autoSpeak });
+    if (voiceConfig.autoSpeak) stopSpeaking();
+    else void speak(t.testVoicePhrase, lang);
+  }
+
   function openChat(chat: SavedChat) {
     setConversationId(chat.id);
     setMessages(chat.messages);
@@ -252,6 +261,7 @@ export default function App() {
   async function sendMessage(raw = draft, retryId?: string) {
     const prompt = raw.trim();
     if (!prompt || busy) return;
+    stopSpeaking();
     setNotice('');
     setDraft('');
     setBusy(true);
@@ -284,6 +294,7 @@ export default function App() {
       setMessages((current) => current.map((message) => message.id === assistantId
         ? { ...message, content: result.text || message.content, state: undefined, retryPrompt: undefined }
         : message));
+      if (voiceConfig.autoSpeak) void speak(result.text || '', lang);
     } catch (error) {
       setGatewayStatus('offline');
       const detail = typeof error === 'string' ? error : error instanceof Error ? error.message : t.unknownConnectionError;
@@ -354,7 +365,7 @@ export default function App() {
             {!sidebarOpen && <button className="icon-button" aria-label={t.openSidebar} onClick={() => setSidebarOpen(true)}><Icon name="panel" /></button>}
             <div className="breadcrumb"><span>{t.workspace}</span><span className="crumb-slash">/</span><strong>{messages.length ? shortTitle(messages, t.newConversation) : t.newConversation}</strong></div>
           </div>
-          <div className="topbar-actions"><span className={`session-badge session-badge--${gatewayStatus}`}><i /> {gatewayStatus === 'connected' ? t.statusConnected : gatewayStatus === 'offline' ? t.statusOffline : t.statusGuest}</span><button className="icon-button" aria-label={format(t.switchTheme, { theme: theme === 'dark' ? t.themeLight : t.themeDark })} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}><Icon name="sun" /></button><button className="icon-button" aria-label={t.startNewChat} onClick={startNewChat}><Icon name="plus" /></button></div>
+          <div className="topbar-actions"><span className={`session-badge session-badge--${gatewayStatus}`}><i /> {gatewayStatus === 'connected' ? t.statusConnected : gatewayStatus === 'offline' ? t.statusOffline : t.statusGuest}</span><button className={`icon-button ${speaking ? 'icon-button--active' : ''}`} aria-label={speaking ? t.stopSpeaking : t.voiceToggleTooltip} title={speaking ? t.stopSpeaking : t.voiceToggleTooltip} onClick={() => (speaking ? stopSpeaking() : toggleAutoSpeak())}><Icon name={speaking ? 'stop' : 'speaker'} /></button><button className="icon-button" aria-label={format(t.switchTheme, { theme: theme === 'dark' ? t.themeLight : t.themeDark })} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}><Icon name="sun" /></button><button className="icon-button" aria-label={t.startNewChat} onClick={startNewChat}><Icon name="plus" /></button></div>
         </header>
 
         <section className={`conversation ${messages.length ? 'conversation--active' : ''}`} aria-label={t.newConversation}>
@@ -379,7 +390,7 @@ export default function App() {
                 <div className="message-body">
                   <div className="message-label">{message.role === 'user' ? t.speakerYou : t.speakerAssistant}{message.state === 'loading' && <span className="thinking-label"><i /> {t.thinking}</span>}</div>
                   {message.state === 'loading' && !message.content ? <div className="loading-line"><span /><span /><span /></div> : <div className={`message-content ${message.state === 'error' ? 'message-content--error' : ''}`}><MessageContent content={message.content} markdown={message.role === 'assistant' && message.state !== 'error'} /></div>}
-                  {message.role === 'assistant' && message.state !== 'loading' && message.state !== 'error' && message.content && <div className="message-actions" aria-label={t.responseActions}><button type="button" onClick={() => void copyMessage(message)}>{copiedMessageId === message.id ? t.copied : t.copy}</button><button type="button" onClick={() => void sendMessage(message.retryPrompt ?? messages.find((item) => item.role === 'user')?.content ?? '', message.id)}>{t.regenerate}</button></div>}
+                  {message.role === 'assistant' && message.state !== 'loading' && message.state !== 'error' && message.content && <div className="message-actions" aria-label={t.responseActions}><button type="button" onClick={() => void speak(message.content, lang)}>{t.readAloud}</button><button type="button" onClick={() => void copyMessage(message)}>{copiedMessageId === message.id ? t.copied : t.copy}</button><button type="button" onClick={() => void sendMessage(message.retryPrompt ?? messages.find((item) => item.role === 'user')?.content ?? '', message.id)}>{t.regenerate}</button></div>}
                   {message.state === 'error' && message.retryPrompt && <button className="retry-button" onClick={() => void sendMessage(message.retryPrompt, message.id)}>{t.retryRequest} <Icon name="chevron" size={14} /></button>}
                 </div>
               </article>)}

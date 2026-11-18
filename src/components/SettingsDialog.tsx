@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { MAX_SPEED, MIN_SPEED } from '../companion/ttsService';
+import type { VoicePersona } from '../companion/speechUtils';
+import { useSpeech } from '../hooks/useSpeech';
 import { APP_LANGUAGE_OPTIONS, useI18n } from '../i18n';
 import type { AppLanguage } from '../i18n';
 
@@ -14,6 +17,7 @@ export default function SettingsDialog({
   onThemeChange: (theme: Theme) => void;
 }) {
   const { lang, setLang, t } = useI18n();
+  const { config: voice, updateConfig, speak, stop: stopSpeaking, speaking } = useSpeech();
   const dialogRef = useRef<HTMLElement | null>(null);
   const [langApplied, setLangApplied] = useState<AppLanguage | null>(null);
 
@@ -131,6 +135,93 @@ export default function SettingsDialog({
                 </button>
               </div>
             </div>
+          </section>
+
+
+          <section className="settings-section" aria-labelledby="settings-voice">
+            <div className="settings-section-head">
+              <span className="section-label" id="settings-voice">{t.voiceSection}</span>
+              <span className="settings-hint">{t.voiceSectionHint}</span>
+            </div>
+
+            <div className="settings-inline">
+              <span className="settings-inline-label">{t.voiceLabel}</span>
+              <select
+                className="settings-select"
+                value={voice.persona}
+                onChange={(event) => updateConfig({ persona: event.target.value as VoicePersona })}
+                aria-label={t.voiceLabel}
+              >
+                <option value="Zephyr">{t.voiceZephyr}</option>
+                <option value="Kore">{t.voiceKore}</option>
+                <option value="Puck">{t.voicePuck}</option>
+                <option value="Charon">{t.voiceCharon}</option>
+                <option value="Fenrir">{t.voiceFenrir}</option>
+              </select>
+            </div>
+
+            <div className="settings-inline">
+              <span className="settings-inline-label">{t.banglaAccentLabel}</span>
+              <div className="settings-segmented" role="radiogroup" aria-label={t.banglaAccentLabel}>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={voice.accent === 'bn-bd'}
+                  className={`settings-segment ${voice.accent === 'bn-bd' ? 'settings-segment--active' : ''}`}
+                  onClick={() => updateConfig({ accent: 'bn-bd' })}
+                >
+                  {t.accentBnBd}
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={voice.accent === 'bn-in'}
+                  className={`settings-segment ${voice.accent === 'bn-in' ? 'settings-segment--active' : ''}`}
+                  onClick={() => updateConfig({ accent: 'bn-in' })}
+                >
+                  {t.accentBnIn}
+                </button>
+              </div>
+            </div>
+
+            <div className="settings-inline">
+              <span className="settings-inline-label">{t.voiceSpeedLabel}</span>
+              <div className="settings-slider">
+                <input
+                  type="range"
+                  min={MIN_SPEED}
+                  max={MAX_SPEED}
+                  step={0.05}
+                  value={voice.speed}
+                  onChange={(event) => updateConfig({ speed: Number(event.target.value) })}
+                  aria-label={t.voiceSpeedLabel}
+                />
+                <span className="settings-slider-value">{voice.speed.toFixed(2)}×</span>
+              </div>
+            </div>
+
+            <div className="settings-inline">
+              <span className="settings-inline-label">{t.autoSpeakLabel}</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={voice.autoSpeak}
+                aria-label={t.autoSpeakLabel}
+                className={`settings-switch ${voice.autoSpeak ? 'settings-switch--on' : ''}`}
+                onClick={() => updateConfig({ autoSpeak: !voice.autoSpeak })}
+              >
+                <span aria-hidden="true" />
+              </button>
+            </div>
+            <p className="settings-footnote">{t.autoSpeakHint}</p>
+
+            <button
+              type="button"
+              className="settings-test-voice"
+              onClick={() => (speaking ? stopSpeaking() : void speak(t.testVoicePhrase, lang))}
+            >
+              {speaking ? t.stopSpeaking : t.testVoiceBtn}
+            </button>
           </section>
 
           <section className="settings-section settings-section--about" aria-labelledby="settings-about">

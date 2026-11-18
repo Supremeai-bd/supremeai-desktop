@@ -135,6 +135,27 @@ export const BN_DICT: Record<TranslationKeys, string> = {
   versionLabel: 'ভার্সন',
   close: 'বন্ধ করুন',
 
+  // Voice / neural speech
+  voiceSection: 'ভয়েস',
+  voiceSectionHint: 'SupremeAI গেটওয়ের নিউরাল ভয়েস, প্রয়োজনে আপনার সিস্টেমের ভয়েস ফলব্যাক হিসেবে।',
+  voiceLabel: 'কণ্ঠ',
+  voiceZephyr: 'Zephyr — উষ্ণ নারীকণ্ঠ',
+  voiceKore: 'Kore — স্পষ্ট নারীকণ্ঠ',
+  voicePuck: 'Puck — হালকা পুরুষকণ্ঠ',
+  voiceCharon: 'Charon — গভীর পুরুষকণ্ঠ',
+  voiceFenrir: 'Fenrir — বলিষ্ঠ পুরুষকণ্ঠ',
+  banglaAccentLabel: 'বাংলা উচ্চারণ',
+  accentBnBd: 'বাংলাদেশ (ঢাকা)',
+  accentBnIn: 'পশ্চিমবঙ্গ (কলকাতা)',
+  voiceSpeedLabel: 'কথার গতি',
+  autoSpeakLabel: 'উত্তর স্বয়ংক্রিয়ভাবে পড়ে শোনাও',
+  autoSpeakHint: 'উত্তর স্ট্রিম শেষ হলে নিজে থেকেই পড়ে শোনানো হবে।',
+  testVoiceBtn: 'ভয়েস পরীক্ষা করুন',
+  readAloud: 'পড়ে শোনাও',
+  stopSpeaking: 'পড়া বন্ধ করুন',
+  voiceToggleTooltip: 'উত্তর উচ্চস্বরে পড়ে শোনান',
+  testVoicePhrase: 'আসসালামু আলাইকুম! আমি আপনার SupremeAI ভয়েস অ্যাসিস্ট্যান্ট। বাংলায় আমার কণ্ঠ এভাবেই শোনাবে।',
+
   // Language switcher
   switchLanguageTooltip: 'ভাষা পরিবর্তন করুন (EN / বাংলা)',
 

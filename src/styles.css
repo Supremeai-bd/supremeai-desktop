@@ -341,3 +341,27 @@ html[lang="bn-BD"] .composer-shell textarea { line-height: 1.65; }
 @media (max-width: 790px) {
   .feedback-widget { right: 10px; bottom: 10px; left: 10px; width: auto; }
 }
+
+/* ---------------------------------------------------------------------------
+   Voice controls (top bar toggle, settings voice panel)
+--------------------------------------------------------------------------- */
+.icon-button--active { color: #16200e; background: var(--acid); border-color: transparent; }
+.icon-button--active:hover { color: #16200e; background: #d6f78c; }
+:root[data-theme="light"] .icon-button--active { color: #ffffff; }
+
+.settings-select { max-width: 190px; padding: 5px 8px; color: var(--text); font-size: 10.5px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 7px; cursor: pointer; }
+.settings-select:focus-visible { border-color: var(--acid); outline: 1px solid var(--acid); outline-offset: 1px; }
+.settings-section .settings-inline + .settings-inline { margin-top: 9px; }
+.settings-slider { display: inline-flex; align-items: center; gap: 8px; }
+.settings-slider input[type="range"] { width: 108px; height: 3px; accent-color: var(--acid); cursor: pointer; }
+.settings-slider-value { min-width: 36px; color: var(--muted); font-family: var(--mono); font-size: 9.5px; text-align: right; }
+.settings-switch { position: relative; width: 34px; height: 18px; padding: 0; background: rgba(255,255,255,.08); border: 1px solid var(--border); border-radius: 999px; cursor: pointer; transition: background .16s, border-color .16s; }
+.settings-switch span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; background: #98a391; border-radius: 50%; transition: transform .16s, background .16s; }
+.settings-switch--on { background: var(--acid); border-color: transparent; }
+.settings-switch--on span { background: #16200e; transform: translateX(16px); }
+.settings-footnote { margin: 8px 0 0; color: var(--quiet); font-size: 9.5px; line-height: 1.5; }
+.settings-test-voice { margin-top: 11px; padding: 7px 12px; color: #16200e; font-size: 10.5px; font-weight: 650; background: var(--acid); border: 0; border-radius: 7px; cursor: pointer; }
+.settings-test-voice:hover { filter: brightness(1.07); }
+:root[data-theme="light"] .settings-test-voice { color: #ffffff; }
+html[lang="bn-BD"] .settings-option-copy small { font-size: 10.5px; }
+html[lang="bn-BD"] .settings-inline-label, html[lang="bn-BD"] .settings-hint { font-size: 10.5px; }

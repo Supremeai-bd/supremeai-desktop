@@ -134,6 +134,27 @@ export const EN_DICT = {
   versionLabel: 'Version',
   close: 'Close',
 
+  // Voice / neural speech
+  voiceSection: 'VOICE',
+  voiceSectionHint: 'Neural voices from the SupremeAI gateway, with your OS voice as fallback.',
+  voiceLabel: 'Voice',
+  voiceZephyr: 'Zephyr — warm female',
+  voiceKore: 'Kore — crisp female',
+  voicePuck: 'Puck — light male',
+  voiceCharon: 'Charon — deep male',
+  voiceFenrir: 'Fenrir — bold male',
+  banglaAccentLabel: 'Bangla dialect',
+  accentBnBd: 'Bangladesh (ঢাকা)',
+  accentBnIn: 'West Bengal (কলকাতা)',
+  voiceSpeedLabel: 'Speaking speed',
+  autoSpeakLabel: 'Speak replies automatically',
+  autoSpeakHint: 'New answers are read aloud when they finish streaming.',
+  testVoiceBtn: 'Test voice',
+  readAloud: 'Read aloud',
+  stopSpeaking: 'Stop speaking',
+  voiceToggleTooltip: 'Read replies out loud',
+  testVoicePhrase: 'Hello! I am your SupremeAI voice assistant. This is how I sound in English.',
+
   // Language switcher
   switchLanguageTooltip: 'Switch language (EN / বাংলা)',
 
