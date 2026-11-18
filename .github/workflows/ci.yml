@@ -68,3 +68,6 @@ jobs:
 
       - name: Compile Rust backend
         run: cargo build --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
