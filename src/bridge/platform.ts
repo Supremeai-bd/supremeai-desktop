@@ -1,8 +1,13 @@
-export type Platform = "tauri" | "capacitor" | "extension" | "web";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 
+export type Platform = "tauri" | "extension" | "web";
+
+// Tauri v2 only exposes the legacy `window.__TAURI__` global when
+// `app.withGlobalTauri` is enabled (it is not, and should not be: it widens the
+// attack surface). `isTauri()` probes the `window.isTauri` flag that the Tauri
+// runtime always injects, so the native branch is actually reachable.
 export function detectPlatform(): Platform {
-  if (typeof window !== "undefined" && (window as any).__TAURI__) return "tauri";
-  if (typeof window !== "undefined" && (window as any).Capacitor) return "capacitor";
+  if (typeof window !== "undefined" && isTauri()) return "tauri";
   if (typeof (globalThis as any).acquireVsCodeApi === "function") return "extension";
   return "web";
 }
@@ -14,37 +19,18 @@ export interface SecureStore {
 }
 
 export function createSecureStore(): SecureStore {
-  const platform = detectPlatform();
-  if (platform === "tauri") {
+  if (detectPlatform() === "tauri") {
+    // Values are read and written by the Rust keystore commands
+    // (see src-tauri/src/auth.rs); they never touch WebView storage.
     return {
       async get(key) {
-        const { invoke } = await import("@tauri-apps/api/core");
         return (await invoke<string | null>("secure_get", { key })) ?? null;
       },
       async set(key, value) {
-        const { invoke } = await import("@tauri-apps/api/core");
         await invoke("secure_set", { key, value });
       },
       async remove(key) {
-        const { invoke } = await import("@tauri-apps/api/core");
         await invoke("secure_remove", { key });
-      },
-    };
-  }
-  if (platform === "capacitor") {
-    return {
-      async get(key) {
-        const { Preferences } = await import("@capacitor/preferences");
-        const { value } = await Preferences.get({ key });
-        return value ?? null;
-      },
-      async set(key, value) {
-        const { Preferences } = await import("@capacitor/preferences");
-        await Preferences.set({ key, value });
-      },
-      async remove(key) {
-        const { Preferences } = await import("@capacitor/preferences");
-        await Preferences.remove({ key });
       },
     };
   }

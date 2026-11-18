@@ -1,0 +1,39 @@
+name: "Desktop CI"
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: "Frontend typecheck & build"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      # Fails fast if package.json and package-lock.json drift apart, which is
+      # what previously broke the release workflow's cache step.
+      - name: Install dependencies (lockfile must be in sync)
+        run: npm ci
+
+      - name: Typecheck & build
+        run: npm run build

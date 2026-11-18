@@ -11,8 +11,8 @@ export function TerminalPanel({ lines = [] }: TerminalPanelProps) {
     let term: any;
     let fit: any;
     (async () => {
-      const { Terminal } = await import("xterm");
-      const { FitAddon } = await import("xterm-addon-fit");
+      const { Terminal } = await import("@xterm/xterm");
+      const { FitAddon } = await import("@xterm/addon-fit");
       term = new Terminal({ theme: { background: "#0d0f12" } });
       fit = new FitAddon();
       term.loadAddon(fit);
