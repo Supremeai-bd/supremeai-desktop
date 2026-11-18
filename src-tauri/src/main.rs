@@ -8,8 +8,12 @@ use tauri::ipc::Channel;
 use tauri::Manager;
 mod admin;
 mod auth;
+mod feedback;
+mod speech;
 use admin::{admin_dashboard, admin_login, admin_logout, admin_verify_totp, AdminSessionState};
 use auth::{secure_get, secure_remove, secure_set, user_login, user_logout, user_session, UserSessionState};
+use feedback::submit_feedback;
+use speech::synthesize_speech;
 
 const DEFAULT_GATEWAY: &str = "https://supremeai-api-ulw0.onrender.com";
 const MAX_PROMPT_BYTES: usize = 80_000;
@@ -241,7 +245,9 @@ fn main() {
             user_session,
             secure_get,
             secure_set,
-            secure_remove
+            secure_remove,
+            submit_feedback,
+            synthesize_speech
         ])
         .run(tauri::generate_context!())
         .expect("error while running the SupremeAI desktop application");

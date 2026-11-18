@@ -24,6 +24,48 @@ Native **Windows, macOS, and Linux** desktop workstation for **SupremeAI**, buil
 
 ---
 
+## 🌐 Languages & In-App Feedback
+
+- **English (default) and বাংলা (bn-BD)** across the whole desktop shell: sidebar, welcome screen, chat, composer, command palette, sign-in and quick-lock, settings.
+- The language switcher lives in two places, matching the web workspace:
+  - a compact **EN | বাং** toggle in the sidebar footer;
+  - the full picker in **Settings** (`⌘ ,` / the gear button in the sidebar footer), with the same option labels and descriptions as the web app.
+- The choice persists per device (`supremeai.desktop.lang.v1` in localStorage) and sets `<html lang>` so Bengali typography (taller glyphs, more line-height, Windows *Nirmala UI* / *Hind Siliguri* fallbacks) kicks in automatically.
+- **Feedback / product pulse**: auto-surfaces after 4 user messages, with snooze (3 days), submit cooldown (14 days) and "don't ask" — the same cadence, ratings and wording as the web widget. Submissions go through the native `submit_feedback` command, which posts `{event_type, payload.context}` to the gateway's authenticated `/api/feedback/ingest` endpoint using the signed-in session token. The token never enters the WebView.
+
+Translations live in `src/i18n/en.ts` (canonical key set) and `src/i18n/bn.ts` (typed against `TranslationKeys`, so a missing Bengali key is a compile error rather than a silent English fallback).
+
+## 🔊 Neural Voice (ported from the web workspace)
+
+The desktop app no longer reads replies through the bare OS speech engine. It now uses the same
+voice stack as the web app:
+
+| Stage | What happens |
+|---|---|
+| Sanitise | Markdown, code fences, URLs and emphasis markers are stripped (`sanitizeSpeechText`) |
+| Segment | One unified voice **per message**; split only at sentence/paragraph boundaries so inline English inside a Bengali sentence never causes mid-sentence male/female voice switching (`splitByScriptSegments`) |
+| Chunk | ≤220 chars at punctuation boundaries so the first audio starts within a few hundred ms (`chunkSpeechSegment`) |
+| Synthesise | `POST {gateway}/api/tts/edge` (edge-tts neural voices) called from Rust — no CORS, no WebView audio limits |
+| Play | Base64 MP3 → blob → `<audio>`, played in sequence with speed control; a generation counter means a new reply (or Stop) instantly cancels stale audio |
+| Fallback | If the gateway is unreachable, language-matched **OS voices** are used — and Bengali is never read by an English voice |
+
+Voices match the web exactly: `bn-BD-NabanitaNeural` / `bn-BD-PradeepNeural` (Bangladesh),
+`bn-IN-TanishaaNeural` / `bn-IN-BashkarNeural` (West Bengal), `en-US-AvaMultilingualNeural` /
+`en-US-AndrewMultilingualNeural`. Five personas (Zephyr, Kore → female; Puck, Charon, Fenrir → male).
+
+Where to find it:
+
+- **Settings → Voice**: persona, Bangla dialect, speaking speed (0.85–1.25×), auto-speak toggle, and a test phrase.
+- **Top bar speaker button**: turns auto-speak on/off; while audio is playing it becomes **Stop**.
+- **Every assistant message**: a *Read aloud* action next to Copy / Regenerate.
+
+Preference key: `supremeai.desktop.tts.v1`. Audio is synthesised per chunk, so long answers begin speaking
+immediately instead of waiting for the whole reply.
+
+---
+
+---
+
 ## 🛠️ Architecture & Tech Stack
 
 | Layer | Technology |

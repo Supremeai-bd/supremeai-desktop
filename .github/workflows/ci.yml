@@ -30,15 +30,51 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      # Fails fast if package.json and package-lock.json drift apart, which is
+      # what previously broke the release workflow's cache step.
       - name: Install dependencies (lockfile must be in sync)
         run: npm ci
 
       - name: Typecheck & build
         run: npm run build
 
+  rust:
+    name: "Rust compile (Tauri backend)"
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> src-tauri/target"
+
+      # tauri::generate_context! embeds the built frontend, so dist/ must exist
+      # before the Rust crate is compiled.
+      - name: Install dependencies & build frontend
+        run: npm ci && npm run build
+
+      - name: Compile Rust backend
+        run: cargo build --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
   auto-merge:
     name: "Auto-Merge PR (Gated)"
-    needs: [web]
+    needs: [web, rust]
     if: github.event_name == 'pull_request' && !cancelled() && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
@@ -50,10 +86,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           WEB_RES: ${{ needs.web.result }}
+          RUST_RES: ${{ needs.rust.result }}
         run: |
           echo "=== Auto-Merge Pre-Landing Gate Evaluation ==="
           echo "Web Gate: $WEB_RES"
-          if [ "$WEB_RES" != "success" ]; then
+          echo "Rust Gate: $RUST_RES"
+          if [ "$WEB_RES" != "success" ] || [ "$RUST_RES" != "success" ]; then
             echo "::error::Required gate did not succeed. Auto-merge blocked."
             exit 1
           fi

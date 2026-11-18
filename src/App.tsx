@@ -1,4 +1,3 @@
-import { speakText, generateLocalReply } from './companion/speechHelper';
 import HolographicHero from './companion/HolographicHero';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Channel, invoke } from '@tauri-apps/api/core';
@@ -6,9 +5,15 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import AdminDashboard from './admin/AdminDashboard';
 import UserSessionPanel from './auth/UserSessionPanel';
+import FeedbackWidget from './components/FeedbackWidget';
+import LanguageToggle from './components/LanguageToggle';
+import SettingsDialog from './components/SettingsDialog';
+import { useSpeech } from './hooks/useSpeech';
+import { dateLocale, format, useI18n } from './i18n';
+import type { Dictionary } from './i18n';
 
 type Role = 'user' | 'assistant';
-type IconName = 'chat' | 'folder' | 'search' | 'flask' | 'activity' | 'settings' | 'plus' | 'clock' | 'chevron' | 'send' | 'spark' | 'panel' | 'sun' | 'close';
+type IconName = 'chat' | 'folder' | 'search' | 'flask' | 'activity' | 'settings' | 'plus' | 'clock' | 'chevron' | 'send' | 'spark' | 'panel' | 'sun' | 'close' | 'speaker' | 'stop';
 type ChatMessage = { id: string; role: Role; content: string; state?: 'loading' | 'error'; retryPrompt?: string };
 type SavedChat = { id: string; title: string; messages: ChatMessage[]; updatedAt: number };
 type ChatResult = { text: string; conversationId?: string };
@@ -17,11 +22,7 @@ type GatewayStatus = 'idle' | 'connected' | 'offline';
 
 const HISTORY_KEY = 'supremeai.desktop.history.v1';
 const THEME_KEY = 'supremeai.desktop.theme.v1';
-const modes = [
-  { label: 'Supreme Auto', id: 'auto', note: 'Best fit for the task' },
-  { label: 'Reasoning Pro', id: 'supremeai/openrouter', note: 'Complex work and planning' },
-  { label: 'Fast Chat', id: 'supremeai/groq', note: 'Quick everyday answers' },
-] as const;
+const modeIds = ['auto', 'supremeai/openrouter', 'supremeai/groq'] as const;
 const iconPaths: Record<IconName, string> = {
   chat: 'M20 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-4.7a8.4 8.4 0 0 1-.9-3.8A8.5 8.5 0 0 1 8.7 5a8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 7 7v.4Z',
   folder: 'M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-10Z',
@@ -37,6 +38,8 @@ const iconPaths: Record<IconName, string> = {
   panel: 'M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-13ZM14 4v16',
   sun: 'M12 3v2m0 14v2m9-9h-2M5 12H3m15.4-6.4-1.4 1.4M7 17l-1.4 1.4m12.8 0L17 17M7 7 5.6 5.6M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z',
   close: 'M18 6 6 18M6 6l12 12',
+  speaker: 'M11 5 6 9H3v6h3l5 4V5Zm4.6 3.4a5 5 0 0 1 0 7.2M18.8 5.9a9 9 0 0 1 0 12.2',
+  stop: 'M6.5 6.5h11v11h-11z',
 };
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
@@ -52,14 +55,14 @@ function newId() {
   return `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
- function loadChats(): SavedChat[] {
+ function loadChats(fallbackTitle: string): SavedChat[] {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as SavedChat[];
     return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item.id === 'string' && Array.isArray(item.messages)).map((item) => ({
       id: item.id,
-      title: typeof item.title === 'string' && item.title.trim() ? item.title : 'New conversation',
+      title: typeof item.title === 'string' && item.title.trim() ? item.title : fallbackTitle,
       updatedAt: typeof item.updatedAt === 'number' && Number.isFinite(item.updatedAt) ? item.updatedAt : Date.now(),
       messages: item.messages.filter((message) => message && (message.role === 'user' || message.role === 'assistant') && typeof message.content === 'string').map((message) => ({
         id: typeof message.id === 'string' ? message.id : newId(),
@@ -73,8 +76,8 @@ function newId() {
   }
 }
 
-function shortTitle(messages: ChatMessage[]) {
-  return (messages.find((message) => message.role === 'user')?.content || 'New conversation').replace(/\s+/g, ' ').slice(0, 58);
+function shortTitle(messages: ChatMessage[], fallback: string) {
+  return (messages.find((message) => message.role === 'user')?.content || fallback).replace(/\s+/g, ' ').slice(0, 58);
 }
 
 function loadTheme(): Theme {
@@ -94,25 +97,27 @@ function saveChats(chats: SavedChat[]) {
   }
 }
 
+function formatAge(timestamp: number, t: Dictionary, language: 'en' | 'bn') {
+  const age = Math.max(0, Date.now() - timestamp);
+  if (age < 60_000) return t.ageJustNow;
+  if (age < 3_600_000) return format(t.ageMinutes, { n: Math.floor(age / 60_000) });
+  if (age < 86_400_000) return format(t.ageHours, { n: Math.floor(age / 3_600_000) });
+  return new Intl.DateTimeFormat(dateLocale(language), { month: 'short', day: 'numeric' }).format(timestamp);
+}
+
 function IconMark() {
   return <span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none"><circle cx="20" cy="20" r="14.5" stroke="currentColor" strokeWidth="1.5" /><ellipse cx="20" cy="20" rx="7" ry="14.5" stroke="currentColor" strokeWidth="1.1" opacity=".74" /><path d="M5.5 20h29M8.7 11.5h22.6M8.7 28.5h22.6" stroke="currentColor" strokeWidth="1" opacity=".56" /><circle cx="30.8" cy="11.2" r="2.4" fill="#c9f36b" /></svg></span>;
 }
 
-function formatAge(timestamp: number) {
-  const age = Math.max(0, Date.now() - timestamp);
-  if (age < 60_000) return 'just now';
-  if (age < 3_600_000) return `${Math.floor(age / 60_000)}m ago`;
-  if (age < 86_400_000) return `${Math.floor(age / 3_600_000)}h ago`;
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(timestamp);
-}
-
 export default function App() {
-  const initialChats = useMemo(loadChats, []);
+  const { t, lang, setLang } = useI18n();
+  const { speak, stop: stopSpeaking, speaking, config: voiceConfig, updateConfig: updateVoiceConfig } = useSpeech();
+  const initialChats = useMemo(() => loadChats(t.newConversation), [t.newConversation]);
   const [savedChats, setSavedChats] = useState<SavedChat[]>(initialChats);
   const [conversationId, setConversationId] = useState(() => initialChats[0]?.id ?? newId());
   const [messages, setMessages] = useState<ChatMessage[]>(() => initialChats[0]?.messages ?? []);
   const [query, setQuery] = useState('');
-  const [modeId, setModeId] = useState<(typeof modes)[number]['id']>('auto');
+  const [modeId, setModeId] = useState<(typeof modeIds)[number]>('auto');
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [notice, setNotice] = useState('');
@@ -121,21 +126,30 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [commandOpen, setCommandOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [hologramOpen, setHologramOpen] = useState(true);
   const [hologramDocked, setHologramDocked] = useState(false);
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('idle');
   const composer = useRef<HTMLTextAreaElement>(null);
   const endOfMessages = useRef<HTMLDivElement>(null);
+
+  const modes = useMemo(() => [
+    { label: 'Supreme Auto', id: 'auto' as const, note: t.modeAutoNote },
+    { label: 'Reasoning Pro', id: 'supremeai/openrouter' as const, note: t.modeReasoningNote },
+    { label: 'Fast Chat', id: 'supremeai/groq' as const, note: t.modeFastNote },
+  ], [t]);
   const mode = modes.find((item) => item.id === modeId) ?? modes[0];
+  const userMessageCount = messages.filter((message) => message.role === 'user').length;
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     try {
       localStorage.setItem(THEME_KEY, theme);
     } catch {
-      setNotice('Theme preference could not be saved on this device.');
+      setNotice(t.themePrefSaveFailed);
     }
-  }, [theme]);
+  }, [theme, t.themePrefSaveFailed]);
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
@@ -151,6 +165,9 @@ export default function App() {
       } else if (event.key.toLowerCase() === 'n') {
         event.preventDefault();
         startNewChat();
+      } else if (event.key === ',') {
+        event.preventDefault();
+        setSettingsOpen(true);
       }
     };
     window.addEventListener('keydown', onShortcut);
@@ -159,15 +176,15 @@ export default function App() {
 
   useEffect(() => {
     if (messages.length === 0) return;
-    const entry: SavedChat = { id: conversationId, title: shortTitle(messages), messages, updatedAt: Date.now() };
-    const next = [entry, ...loadChats().filter((item) => item.id !== conversationId)].slice(0, 30);
+    const entry: SavedChat = { id: conversationId, title: shortTitle(messages, t.newConversation), messages, updatedAt: Date.now() };
+    const next = [entry, ...loadChats(t.newConversation).filter((item) => item.id !== conversationId)].slice(0, 30);
     try {
       saveChats(next);
       setSavedChats(next);
     } catch {
-      setNotice('Local history could not be saved in this session.');
+      setNotice(t.historySaveFailed);
     }
-  }, [conversationId, messages]);
+  }, [conversationId, messages, t.newConversation, t.historySaveFailed]);
 
   useEffect(() => {
     endOfMessages.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -192,6 +209,12 @@ export default function App() {
     composer.current?.focus();
   }
 
+  function toggleAutoSpeak() {
+    updateVoiceConfig({ autoSpeak: !voiceConfig.autoSpeak });
+    if (voiceConfig.autoSpeak) stopSpeaking();
+    else void speak(t.testVoicePhrase, lang);
+  }
+
   function openChat(chat: SavedChat) {
     setConversationId(chat.id);
     setMessages(chat.messages);
@@ -200,23 +223,23 @@ export default function App() {
   }
 
   function renameChat(chat: SavedChat) {
-    const title = window.prompt('Rename conversation', chat.title)?.trim();
+    const title = window.prompt(t.renameConversation, chat.title)?.trim();
     if (!title) return;
     const next = savedChats.map((item) => item.id === chat.id ? { ...item, title, updatedAt: Date.now() } : item);
     setSavedChats(next);
-    if (!saveChats(next)) setNotice('Renamed chat could not be saved on this device.');
+    if (!saveChats(next)) setNotice(t.renameSaveFailed);
   }
 
   function deleteChat(chat: SavedChat) {
-    if (!window.confirm(`Delete “${chat.title}”?`)) return;
+    if (!window.confirm(format(t.deleteConfirm, { title: chat.title }))) return;
     const next = savedChats.filter((item) => item.id !== chat.id);
     setSavedChats(next);
-    if (!saveChats(next)) setNotice('Deleted chat could not be saved on this device.');
+    if (!saveChats(next)) setNotice(t.deleteSaveFailed);
     if (chat.id === conversationId) startNewChat();
   }
 
   function exportChat(chat: SavedChat) {
-    const markdown = `# ${chat.title}\n\n${chat.messages.map((message) => `## ${message.role === 'user' ? 'You' : 'SupremeAI'}\n\n${message.content}`).join('\n\n')}`;
+    const markdown = `# ${chat.title}\n\n${chat.messages.map((message) => `## ${message.role === 'user' ? t.exportUser : t.exportAssistant}\n\n${message.content}`).join('\n\n')}`;
     const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
     const link = document.createElement('a');
     link.href = url;
@@ -231,13 +254,14 @@ export default function App() {
       setCopiedMessageId(message.id);
       window.setTimeout(() => setCopiedMessageId((current) => current === message.id ? null : current), 1600);
     } catch {
-      setNotice('Could not copy this response to the clipboard.');
+      setNotice(t.copyFailed);
     }
   }
 
   async function sendMessage(raw = draft, retryId?: string) {
     const prompt = raw.trim();
     if (!prompt || busy) return;
+    stopSpeaking();
     setNotice('');
     setDraft('');
     setBusy(true);
@@ -270,11 +294,12 @@ export default function App() {
       setMessages((current) => current.map((message) => message.id === assistantId
         ? { ...message, content: result.text || message.content, state: undefined, retryPrompt: undefined }
         : message));
+      if (voiceConfig.autoSpeak) void speak(result.text || '', lang);
     } catch (error) {
       setGatewayStatus('offline');
-      const detail = typeof error === 'string' ? error : error instanceof Error ? error.message : 'Unknown connection error';
+      const detail = typeof error === 'string' ? error : error instanceof Error ? error.message : t.unknownConnectionError;
       setMessages((current) => current.map((message) => message.id === assistantId
-        ? { ...message, content: 'The Gateway could not complete this request.', state: 'error', retryPrompt: prompt }
+        ? { ...message, content: t.assistantFailed, state: 'error', retryPrompt: prompt }
         : message));
       setNotice(detail.slice(0, 240));
     } finally {
@@ -285,42 +310,51 @@ export default function App() {
 
   return (
     <div className={`workstation ${sidebarOpen ? '' : 'workstation--compact'}`}>
-      <aside className="sidebar" aria-label="Main navigation">
+      <aside className="sidebar" aria-label={t.mainNavigation}>
         <div className="brand-row">
           <IconMark />
-          <div className="brand-copy"><span className="brand-name">SUPREME<span>AI</span></span><span className="brand-kicker">INTELLIGENCE WORKSPACE</span></div>
-          <button className="icon-button sidebar-collapse" aria-label="Collapse sidebar" onClick={() => setSidebarOpen(false)}><Icon name="panel" /></button>
+          <div className="brand-copy"><span className="brand-name">SUPREME<span>AI</span></span><span className="brand-kicker">{t.appKicker}</span></div>
+          <button className="icon-button sidebar-collapse" aria-label={t.collapseSidebar} onClick={() => setSidebarOpen(false)}><Icon name="panel" /></button>
         </div>
 
-        <button className="workspace-switcher" type="button" title="Personal workspace">
-          <span className="workspace-avatar">S</span><span className="workspace-label"><strong>Personal workspace</strong><small>Guest session</small></span><Icon name="chevron" size={15} />
+        <button className="workspace-switcher" type="button" title={t.personalWorkspace}>
+          <span className="workspace-avatar">S</span><span className="workspace-label"><strong>{t.personalWorkspace}</strong><small>{t.guestSession}</small></span><Icon name="chevron" size={15} />
         </button>
 
         <div className="sidebar-section">
-          <span className="section-label">WORKSPACE</span>
-          <button className="nav-item nav-item--active" onClick={startNewChat}><Icon name="chat" /><span>New chat</span><kbd>⌘ N</kbd></button>
-          <button className="nav-item" onClick={() => document.querySelector<HTMLInputElement>('#history-search')?.focus()}><Icon name="search" /><span>Search chats</span><kbd>⌘ K</kbd></button>
-          <button className="nav-item nav-item--disabled" disabled title="Projects are planned for the next build milestone"><Icon name="folder" /><span>Projects</span><span className="nav-soon">SOON</span></button>
-          <button className="nav-item nav-item--disabled" disabled title="Research workflows are not connected in this first build"><Icon name="flask" /><span>Deep research</span><span className="nav-soon">SOON</span></button>
-          <button className="nav-item nav-item--disabled" disabled title="Tower agent controls are not connected in this first build"><Icon name="activity" /><span>Agent activity</span><span className="nav-soon">SOON</span></button>
-          <button className="nav-item" onClick={() => setAdminOpen(true)}><Icon name="settings" /><span>Admin console</span></button>
+          <span className="section-label">{t.workspaceSection.toUpperCase()}</span>
+          <button className="nav-item nav-item--active" onClick={startNewChat}><Icon name="chat" /><span>{t.newChat}</span><kbd>⌘ N</kbd></button>
+          <button className="nav-item" onClick={() => document.querySelector<HTMLInputElement>('#history-search')?.focus()}><Icon name="search" /><span>{t.searchChats}</span><kbd>⌘ K</kbd></button>
+          <button className="nav-item nav-item--disabled" disabled title={t.projectsPlanned}><Icon name="folder" /><span>{t.projects}</span><span className="nav-soon">{t.soon}</span></button>
+          <button className="nav-item nav-item--disabled" disabled title={t.researchNotConnected}><Icon name="flask" /><span>{t.deepResearch}</span><span className="nav-soon">{t.soon}</span></button>
+          <button className="nav-item nav-item--disabled" disabled title={t.towerNotConnected}><Icon name="activity" /><span>{t.agentActivity}</span><span className="nav-soon">{t.soon}</span></button>
+          <button className="nav-item" onClick={() => setAdminOpen(true)}><Icon name="settings" /><span>{t.adminConsole}</span></button>
         </div>
 
-        <div className="history-head"><span className="section-label">RECENT CHATS</span><span className="history-count">{savedChats.length.toString().padStart(2, '0')}</span></div>
-        <label className="history-search"><Icon name="search" size={15} /><input id="history-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter conversations" /></label>
-        <div className="history-list" role="list" aria-label="Recent conversations">
-          {filteredChats.length === 0 ? <p className="history-empty">{searchTerm ? 'No matching conversations.' : 'Your conversations will appear here.'}</p> : filteredChats.map((chat) => (
+        <div className="history-head"><span className="section-label">{t.recentChats.toUpperCase()}</span><span className="history-count">{savedChats.length.toString().padStart(2, '0')}</span></div>
+        <label className="history-search"><Icon name="search" size={15} /><input id="history-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t.filterConversations} /></label>
+        <div className="history-list" role="list" aria-label={t.recentChats}>
+          {filteredChats.length === 0 ? <p className="history-empty">{searchTerm ? t.noMatchingConversations : t.emptyHistory}</p> : filteredChats.map((chat) => (
             <div key={chat.id} className={`history-item-wrap ${chat.id === conversationId ? 'history-item-wrap--active' : ''}`}>
-              <button role="listitem" className={`history-item ${chat.id === conversationId ? 'history-item--active' : ''}`} onClick={() => openChat(chat)} onDoubleClick={() => renameChat(chat)} title="Double-click to rename">
-                <span className="history-title">{chat.title}</span><span className="history-age">{formatAge(chat.updatedAt)}</span>
+              <button role="listitem" className={`history-item ${chat.id === conversationId ? 'history-item--active' : ''}`} onClick={() => openChat(chat)} onDoubleClick={() => renameChat(chat)} title={t.doubleClickToRename}>
+                <span className="history-title">{chat.title}</span><span className="history-age">{formatAge(chat.updatedAt, t, lang)}</span>
               </button>
-              <div className="history-item-actions" aria-label={`Actions for ${chat.title}`}><button type="button" aria-label="Export conversation" onClick={() => exportChat(chat)}>↓</button><button type="button" aria-label="Rename conversation" onClick={() => renameChat(chat)}>✎</button><button type="button" aria-label="Delete conversation" onClick={() => deleteChat(chat)}>×</button></div>
+              <div className="history-item-actions" aria-label={format(t.actionsFor, { title: chat.title })}><button type="button" aria-label={t.exportConversation} onClick={() => exportChat(chat)}>↓</button><button type="button" aria-label={t.renameConversation} onClick={() => renameChat(chat)}>✎</button><button type="button" aria-label={t.deleteConversation} onClick={() => deleteChat(chat)}>×</button></div>
             </div>
           ))}
         </div>
 
         <div className="sidebar-bottom">
-          <div className="build-card"><span className="build-mark"><Icon name="spark" size={15} /></span><div><strong>FIRST BUILD</strong><p>Chat is live. Other modules are staged, not simulated.</p></div></div>
+          <div className="build-card"><span className="build-mark"><Icon name="spark" size={15} /></span><div><strong>{t.buildCardTitle.toUpperCase()}</strong><p>{t.buildCardBody}</p></div></div>
+          <div className="sidebar-utility-row">
+            <LanguageToggle />
+            <button className="utility-button" type="button" onClick={() => setFeedbackOpen(true)} title={t.shareFeedbackBtn}>
+              <Icon name="spark" size={14} /><span>{t.shareFeedbackBtn}</span>
+            </button>
+            <button className="utility-button utility-button--icon" type="button" onClick={() => setSettingsOpen(true)} title={t.settings} aria-label={t.settings}>
+              <Icon name="settings" size={14} />
+            </button>
+          </div>
           <UserSessionPanel />
         </div>
       </aside>
@@ -328,25 +362,25 @@ export default function App() {
       <main className="main-panel">
         <header className="topbar">
           <div className="topbar-leading">
-            {!sidebarOpen && <button className="icon-button" aria-label="Open sidebar" onClick={() => setSidebarOpen(true)}><Icon name="panel" /></button>}
-            <div className="breadcrumb"><span>Workspace</span><span className="crumb-slash">/</span><strong>{messages.length ? shortTitle(messages) : 'New conversation'}</strong></div>
+            {!sidebarOpen && <button className="icon-button" aria-label={t.openSidebar} onClick={() => setSidebarOpen(true)}><Icon name="panel" /></button>}
+            <div className="breadcrumb"><span>{t.workspace}</span><span className="crumb-slash">/</span><strong>{messages.length ? shortTitle(messages, t.newConversation) : t.newConversation}</strong></div>
           </div>
-          <div className="topbar-actions"><span className={`session-badge session-badge--${gatewayStatus}`}><i /> {gatewayStatus === 'connected' ? 'CONNECTED' : gatewayStatus === 'offline' ? 'OFFLINE' : 'GUEST MODE'}</span><button className="icon-button" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}><Icon name="sun" /></button><button className="icon-button" aria-label="Start a new chat" onClick={startNewChat}><Icon name="plus" /></button></div>
+          <div className="topbar-actions"><span className={`session-badge session-badge--${gatewayStatus}`}><i /> {gatewayStatus === 'connected' ? t.statusConnected : gatewayStatus === 'offline' ? t.statusOffline : t.statusGuest}</span><button className={`icon-button ${speaking ? 'icon-button--active' : ''}`} aria-label={speaking ? t.stopSpeaking : t.voiceToggleTooltip} title={speaking ? t.stopSpeaking : t.voiceToggleTooltip} onClick={() => (speaking ? stopSpeaking() : toggleAutoSpeak())}><Icon name={speaking ? 'stop' : 'speaker'} /></button><button className="icon-button" aria-label={format(t.switchTheme, { theme: theme === 'dark' ? t.themeLight : t.themeDark })} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}><Icon name="sun" /></button><button className="icon-button" aria-label={t.startNewChat} onClick={startNewChat}><Icon name="plus" /></button></div>
         </header>
 
-        <section className={`conversation ${messages.length ? 'conversation--active' : ''}`} aria-label="Conversation">
+        <section className={`conversation ${messages.length ? 'conversation--active' : ''}`} aria-label={t.newConversation}>
           {messages.length === 0 ? (
             <div className="welcome-wrap">
               <div className="welcome-orbit"><span className="orbit-ring orbit-ring--outer" /><span className="orbit-ring orbit-ring--inner" /><span className="orbit-core"><IconMark /></span><span className="orbit-signal" /></div>
-              <p className="eyebrow"><span className="eyebrow-line" /> YOUR THINKING PARTNER <span className="eyebrow-line" /></p>
-              <h1>What are we<br /><em>working on?</em></h1>
-              <p className="welcome-copy">One workspace for ideas, research and things worth building.</p>
+              <p className="eyebrow"><span className="eyebrow-line" /> {t.welcomeEyebrow} <span className="eyebrow-line" /></p>
+              <h1>{t.welcomeTitleLead}<br /><em>{t.welcomeTitleAccent}</em></h1>
+              <p className="welcome-copy">{t.welcomeCopy}</p>
               <div className="prompt-grid">
                 {[
-                  { title: 'Research a topic', text: 'Help me research a topic and organize the key findings.', icon: 'flask' as const },
-                  { title: 'Write something', text: 'Help me write a clear, useful first draft.', icon: 'spark' as const },
-                  { title: 'Build an idea', text: 'Help me turn an idea into a practical build plan.', icon: 'activity' as const },
-                ].map((item) => <button key={item.title} className="prompt-card" onClick={() => { setDraft(item.text); composer.current?.focus(); }}><span className="prompt-icon"><Icon name={item.icon} size={17} /></span><span><strong>{item.title}</strong><small>Start with a prompt</small></span><Icon name="chevron" size={15} /></button>)}
+                  { title: t.promptResearchTitle, text: t.promptResearchText, icon: 'flask' as const },
+                  { title: t.promptWriteTitle, text: t.promptWriteText, icon: 'spark' as const },
+                  { title: t.promptBuildTitle, text: t.promptBuildText, icon: 'activity' as const },
+                ].map((item) => <button key={item.title} className="prompt-card" onClick={() => { setDraft(item.text); composer.current?.focus(); }}><span className="prompt-icon"><Icon name={item.icon} size={17} /></span><span><strong>{item.title}</strong><small>{t.startWithPrompt}</small></span><Icon name="chevron" size={15} /></button>)}
               </div>
             </div>
           ) : (
@@ -354,10 +388,10 @@ export default function App() {
               {messages.map((message) => <article key={message.id} className={`message message--${message.role}`}>
                 {message.role === 'assistant' && <div className="assistant-mark"><IconMark /></div>}
                 <div className="message-body">
-                  <div className="message-label">{message.role === 'user' ? 'YOU' : 'SUPREMEAI'}{message.state === 'loading' && <span className="thinking-label"><i /> THINKING</span>}</div>
+                  <div className="message-label">{message.role === 'user' ? t.speakerYou : t.speakerAssistant}{message.state === 'loading' && <span className="thinking-label"><i /> {t.thinking}</span>}</div>
                   {message.state === 'loading' && !message.content ? <div className="loading-line"><span /><span /><span /></div> : <div className={`message-content ${message.state === 'error' ? 'message-content--error' : ''}`}><MessageContent content={message.content} markdown={message.role === 'assistant' && message.state !== 'error'} /></div>}
-                  {message.role === 'assistant' && message.state !== 'loading' && message.state !== 'error' && message.content && <div className="message-actions" aria-label="Response actions"><button type="button" onClick={() => void copyMessage(message)}>{copiedMessageId === message.id ? 'Copied' : 'Copy'}</button><button type="button" onClick={() => void sendMessage(message.retryPrompt ?? messages.find((item) => item.role === 'user')?.content ?? '', message.id)}>Regenerate</button></div>}
-                  {message.state === 'error' && message.retryPrompt && <button className="retry-button" onClick={() => void sendMessage(message.retryPrompt, message.id)}>Retry request <Icon name="chevron" size={14} /></button>}
+                  {message.role === 'assistant' && message.state !== 'loading' && message.state !== 'error' && message.content && <div className="message-actions" aria-label={t.responseActions}><button type="button" onClick={() => void speak(message.content, lang)}>{t.readAloud}</button><button type="button" onClick={() => void copyMessage(message)}>{copiedMessageId === message.id ? t.copied : t.copy}</button><button type="button" onClick={() => void sendMessage(message.retryPrompt ?? messages.find((item) => item.role === 'user')?.content ?? '', message.id)}>{t.regenerate}</button></div>}
+                  {message.state === 'error' && message.retryPrompt && <button className="retry-button" onClick={() => void sendMessage(message.retryPrompt, message.id)}>{t.retryRequest} <Icon name="chevron" size={14} /></button>}
                 </div>
               </article>)}
               <div ref={endOfMessages} />
@@ -366,16 +400,16 @@ export default function App() {
         </section>
 
         <div className="composer-area">
-          {notice && <div className="notice" role="status"><span>{notice}</span><button aria-label="Dismiss connection detail" onClick={() => setNotice('')}><Icon name="close" size={14} /></button></div>}
+          {notice && <div className="notice" role="status"><span>{notice}</span><button aria-label={t.dismissNotice} onClick={() => setNotice('')}><Icon name="close" size={14} /></button></div>}
           <form className="composer-shell" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
-            <div className="composer-topline"><label htmlFor="model-select">MODEL</label><select id="model-select" value={mode.id} onChange={(event) => setModeId(event.target.value as (typeof modes)[number]['id'])}>{modes.map((item) => <option key={item.id} value={item.id}>{item.label} — {item.note}</option>)}</select><span className="composer-hint">Gateway-routed</span></div>
-            <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder="Ask SupremeAI anything…" rows={1} aria-label="Message SupremeAI" disabled={busy} />
-            <div className="composer-footer"><span className="privacy-note"><span className="privacy-dot" /> Guest session · history stays on this device</span><button className="send-button" type="submit" disabled={!draft.trim() || busy} aria-label={busy ? 'Waiting for SupremeAI' : 'Send message'}>{busy ? <span className="send-spinner" /> : <Icon name="send" size={17} />}<span>{busy ? 'Working' : 'Send'}</span><kbd>↵</kbd></button></div>
+            <div className="composer-topline"><label htmlFor="model-select">{t.modelLabel}</label><select id="model-select" value={mode.id} onChange={(event) => setModeId(event.target.value as (typeof modeIds)[number])}>{modes.map((item) => <option key={item.id} value={item.id}>{item.label} — {item.note}</option>)}</select><span className="composer-hint">{t.gatewayRouted}</span></div>
+            <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={t.askPlaceholder} rows={1} aria-label={t.messageSupremeAI} disabled={busy} />
+            <div className="composer-footer"><span className="privacy-note"><span className="privacy-dot" /> {t.privacyNote}</span><button className="send-button" type="submit" disabled={!draft.trim() || busy} aria-label={busy ? t.waitingForSupremeAI : t.sendMessage}>{busy ? <span className="send-spinner" /> : <Icon name="send" size={17} />}<span>{busy ? t.working : t.send}</span><kbd>↵</kbd></button></div>
           </form>
-          <p className="composer-disclaimer">SupremeAI can make mistakes. Verify important information before acting.</p>
+          <p className="composer-disclaimer">{t.disclaimer}</p>
         </div>
       </main>
-      {commandOpen && <div className="command-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCommandOpen(false); }}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette"><div className="command-heading"><span>COMMAND PALETTE</span><kbd>ESC</kbd></div><button onClick={startNewChat}><Icon name="plus" size={16} /><span><strong>New chat</strong><small>Start a fresh conversation</small></span><kbd>⌘ N</kbd></button><button onClick={() => { setCommandOpen(false); document.querySelector<HTMLInputElement>('#history-search')?.focus(); }}><Icon name="search" size={16} /><span><strong>Search chats</strong><small>Find by title or message content</small></span><kbd>⌘ K</kbd></button><button onClick={() => { setTheme(theme === 'dark' ? 'light' : 'dark'); setCommandOpen(false); }}><Icon name="sun" size={16} /><span><strong>Switch theme</strong><small>Use the {theme === 'dark' ? 'light' : 'dark'} workspace theme</small></span></button><button onClick={() => { setSidebarOpen(!sidebarOpen); setCommandOpen(false); }}><Icon name="panel" size={16} /><span><strong>{sidebarOpen ? 'Collapse' : 'Open'} sidebar</strong><small>Change workspace navigation visibility</small></span></button></section></div>}
+      {commandOpen && <div className="command-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCommandOpen(false); }}><section className="command-palette" role="dialog" aria-modal="true" aria-label={t.commandPalette}><div className="command-heading"><span>{t.commandPalette}</span><kbd>ESC</kbd></div><button onClick={startNewChat}><Icon name="plus" size={16} /><span><strong>{t.newChat}</strong><small>{t.newChatHint}</small></span><kbd>⌘ N</kbd></button><button onClick={() => { setCommandOpen(false); document.querySelector<HTMLInputElement>('#history-search')?.focus(); }}><Icon name="search" size={16} /><span><strong>{t.searchChats}</strong><small>{t.searchChatsHint}</small></span><kbd>⌘ K</kbd></button><button onClick={() => { setCommandOpen(false); setSettingsOpen(true); }}><Icon name="settings" size={16} /><span><strong>{t.openSettings}</strong><small>{t.openSettingsHint}</small></span><kbd>⌘ ,</kbd></button><button onClick={() => { setCommandOpen(false); setFeedbackOpen(true); }}><Icon name="spark" size={16} /><span><strong>{t.openFeedback}</strong><small>{t.openFeedbackHint}</small></span></button><button onClick={() => { setCommandOpen(false); setLang(lang === 'bn' ? 'en' : 'bn'); }}><Icon name="chat" size={16} /><span><strong>{t.switchLanguageTooltip}</strong><small>{lang === 'bn' ? 'English' : 'বাংলা'}</small></span></button><button onClick={() => { setTheme(theme === 'dark' ? 'light' : 'dark'); setCommandOpen(false); }}><Icon name="sun" size={16} /><span><strong>{t.switchThemeTitle}</strong><small>{format(t.switchThemeHint, { theme: theme === 'dark' ? t.themeLight : t.themeDark })}</small></span></button><button onClick={() => { setSidebarOpen(!sidebarOpen); setCommandOpen(false); }}><Icon name="panel" size={16} /><span><strong>{sidebarOpen ? t.collapseSidebar : t.openSidebar}</strong><small>{t.sidebarVisibilityHint}</small></span></button></section></div>}
       {hologramOpen && (
         <HolographicHero
           isDocked={hologramDocked}
@@ -386,6 +420,12 @@ export default function App() {
         />
       )}
       {adminOpen && <AdminDashboard onClose={() => setAdminOpen(false)} />}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} theme={theme} onThemeChange={setTheme} />}
+      <FeedbackWidget
+        totalUserMessages={userMessageCount}
+        forceOpen={feedbackOpen}
+        onCloseForceOpen={() => setFeedbackOpen(false)}
+      />
     </div>
   );
 }
