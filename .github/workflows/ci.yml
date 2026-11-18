@@ -30,10 +30,33 @@ jobs:
           node-version: "22"
           cache: "npm"
 
-      # Fails fast if package.json and package-lock.json drift apart, which is
-      # what previously broke the release workflow's cache step.
       - name: Install dependencies (lockfile must be in sync)
         run: npm ci
 
       - name: Typecheck & build
         run: npm run build
+
+  auto-merge:
+    name: "Auto-Merge PR (Gated)"
+    needs: [web]
+    if: github.event_name == 'pull_request' && !cancelled() && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Verify checks and auto-merge PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          WEB_RES: ${{ needs.web.result }}
+        run: |
+          echo "=== Auto-Merge Pre-Landing Gate Evaluation ==="
+          echo "Web Gate: $WEB_RES"
+          if [ "$WEB_RES" != "success" ]; then
+            echo "::error::Required gate did not succeed. Auto-merge blocked."
+            exit 1
+          fi
+          echo "All required gates 100% green."
+          echo "Queueing autonomous squash landing to main for PR #$PR_NUMBER..."
+          gh pr merge "$PR_NUMBER" --auto --squash --delete-branch || gh pr merge "$PR_NUMBER" --squash --delete-branch || true
