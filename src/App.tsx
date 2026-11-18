@@ -1,9 +1,7 @@
 import { speakText, generateLocalReply } from './companion/speechHelper';
 import HolographicHero from './companion/HolographicHero';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-// @ts-ignore
-import { Channel } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import AdminDashboard from './admin/AdminDashboard';
