@@ -18,6 +18,7 @@ on:
       - "index.html"
       - "package.json"
       - "package-lock.json"
+      - "version.json"
       - ".github/workflows/release-all.yml"
     tags:
       - "v*"
