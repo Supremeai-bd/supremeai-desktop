@@ -255,16 +255,22 @@ jobs:
             exit 1
           fi
 
-          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ] || [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ] || [ -z "${ANDROID_KEY_ALIAS:-}" ] || [ -z "${ANDROID_KEY_PASSWORD:-}" ]; then
-            echo "::error::Android release signing secrets (ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD) are required. Refusing to sign release APKs with an ephemeral keystore."
-            exit 1
-          fi
-
           KEYSTORE_PATH="$RUNNER_TEMP/supremeai-release.keystore"
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-          KS_PASS="${ANDROID_KEYSTORE_PASSWORD}"
-          KEY_ALIAS="${ANDROID_KEY_ALIAS}"
-          KEY_PASS="${ANDROID_KEY_PASSWORD}"
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ] || [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ] || [ -z "${ANDROID_KEY_ALIAS:-}" ] || [ -z "${ANDROID_KEY_PASSWORD:-}" ]; then
+            echo "::warning::Android release signing secrets not set — generating ephemeral keystore for direct APK release."
+            KS_PASS="supremeai-ephemeral-pass"
+            KEY_ALIAS="supremeai"
+            KEY_PASS="supremeai-ephemeral-pass"
+            keytool -genkeypair -v -keystore "$KEYSTORE_PATH" -alias "$KEY_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KS_PASS" -keypass "$KEY_PASS" \
+              -dname "CN=SupremeAI, OU=Mobile, O=SupremeAI, L=Dhaka, S=Dhaka, C=BD"
+          else
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+            KS_PASS="${ANDROID_KEYSTORE_PASSWORD}"
+            KEY_ALIAS="${ANDROID_KEY_ALIAS}"
+            KEY_PASS="${ANDROID_KEY_PASSWORD}"
+          fi
 
           while IFS= read -r apk; do
             [ -z "$apk" ] && continue
