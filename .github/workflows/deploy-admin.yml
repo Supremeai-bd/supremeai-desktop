@@ -45,14 +45,12 @@ jobs:
         shell: bash
         working-directory: admin
         run: |
-          # Use fallback DATABASE_URL for build-time static evaluation
           export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres"
           npx next build
 
       - name: Deploy to Cloudflare Pages (supremeai-admin)
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy admin/dist --project-name=supremeai-admin --branch=main
+        shell: bash
+        working-directory: admin
+        run: |
+          npx wrangler pages deploy dist --project-name=supremeai-admin --branch=main --commit-dirty=true
