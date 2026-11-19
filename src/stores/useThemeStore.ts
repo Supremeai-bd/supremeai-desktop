@@ -4,6 +4,7 @@ import mistyFjordsBg from '../assets/images/bg_misty_fjords_1794588925307.jpg';
 import emeraldHighlandsBg from '../assets/images/bg_emerald_highlands_1794588925886.jpg';
 import amberCanyonBg from '../assets/images/bg_amber_canyon_1794588925843.jpg';
 import obsidianPeaksBg from '../assets/images/bg_obsidian_peaks_1794588927192.jpg';
+import { schedulePreferencesPatch } from '../services/userPreferencesSyncBus';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type ResolvedColorScheme = 'light' | 'dark';
@@ -1836,6 +1837,7 @@ const persistFromState = (s: ThemeStoreState) => {
     themeOptions: s.themeOptions,
   };
   savePersistedConfig(payload);
+  schedulePreferencesPatch({ theme_config: payload });
 };
 
 const computeIsAnimating = (

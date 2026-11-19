@@ -1,4 +1,4 @@
-name: "Desktop CI"
+name: "SupremeAI Unified CI (Web + Desktop + Tauri Android)"
 
 on:
   pull_request:
@@ -11,44 +11,42 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-ci-${{ github.ref }}
+  group: supremeai-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   web:
-    name: "Frontend typecheck & build"
+    name: "Web Studio Typecheck & Build"
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Setup Node.js 22
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
 
-      # Fails fast if package.json and package-lock.json drift apart, which is
-      # what previously broke the release workflow's cache step.
-      - name: Install dependencies (lockfile must be in sync)
+      - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck & build
-        run: npm run build
+      - name: Typecheck & Build Web Bundle
+        run: npm run build:web
 
-  rust:
-    name: "Rust compile (Tauri backend)"
+  desktop-rust:
+    name: "Desktop Tauri v2 (Windows Rust + React UI)"
     runs-on: windows-latest
     timeout-minutes: 45
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Setup Node.js 22
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
@@ -61,40 +59,90 @@ jobs:
         with:
           workspaces: "src-tauri -> src-tauri/target"
 
-      # tauri::generate_context! embeds the built frontend, so dist/ must exist
-      # before the Rust crate is compiled.
-      - name: Install dependencies & build frontend
-        run: npm ci && npm run build
+      - name: Install dependencies & build shared app bundle
+        run: npm ci && npm run build:app
 
-      - name: Compile Rust backend
+      - name: Compile Rust Tauri backend
         run: cargo build --manifest-path src-tauri/Cargo.toml
 
       - name: Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  android-tauri:
+    name: "Android Tauri v2 APK (Single-Source React UI + Rust)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Android NDK
+        run: |
+          NDK_DIR=$(ls -d "$ANDROID_HOME/ndk/"* 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -z "$NDK_DIR" ]; then
+            yes | sdkmanager --licenses >/dev/null 2>&1 || true
+            sdkmanager "ndk;27.0.12077973"
+            NDK_DIR="$ANDROID_HOME/ndk/27.0.12077973"
+          fi
+          echo "NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+
+      - name: Setup Rust toolchain (Android aarch64)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> src-tauri/target"
+
+      - name: Install dependencies & build shared app bundle
+        run: npm ci && npm run build:app
+
+      - name: Initialize Tauri Android target & compile Debug APK
+        run: |
+          if [ ! -d "src-tauri/gen/android" ]; then
+            npx tauri android init --ci
+          fi
+          npx tauri android build --apk --debug --target aarch64
+
   auto-merge:
-    name: "Auto-Merge PR (Gated)"
-    needs: [web, rust]
+    name: "Auto-Merge PR (All 3 Platforms Gated)"
+    needs: [web, desktop-rust, android-tauri]
     if: github.event_name == 'pull_request' && !cancelled() && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     steps:
-      - name: Verify checks and auto-merge PR
+      - name: Verify all 3 platform gates and auto-merge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           WEB_RES: ${{ needs.web.result }}
-          RUST_RES: ${{ needs.rust.result }}
+          DESKTOP_RES: ${{ needs.desktop-rust.result }}
+          ANDROID_RES: ${{ needs.android-tauri.result }}
         run: |
-          echo "=== Auto-Merge Pre-Landing Gate Evaluation ==="
-          echo "Web Gate: $WEB_RES"
-          echo "Rust Gate: $RUST_RES"
-          if [ "$WEB_RES" != "success" ] || [ "$RUST_RES" != "success" ]; then
-            echo "::error::Required gate did not succeed. Auto-merge blocked."
+          echo "Web Gate: $WEB_RES | Desktop Gate: $DESKTOP_RES | Android Gate: $ANDROID_RES"
+          if [ "$WEB_RES" != "success" ] || [ "$DESKTOP_RES" != "success" ] || [ "$ANDROID_RES" != "success" ]; then
+            echo "::error::One or more platform gates failed. Auto-merge blocked."
             exit 1
           fi
-          echo "All required gates 100% green."
-          echo "Queueing autonomous squash landing to main for PR #$PR_NUMBER..."
           gh pr merge "$PR_NUMBER" --auto --squash --delete-branch || gh pr merge "$PR_NUMBER" --squash --delete-branch || true

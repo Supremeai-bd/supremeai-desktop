@@ -1,0 +1,467 @@
+import { apiClient } from './apiClient';
+import { AuthUser } from '../types';
+import { env } from '../config/env';
+import { logger } from '../utils/logger';
+
+export interface LoginResponse {
+  success: boolean;
+  user: AuthUser;
+  token: string;
+}
+
+export interface Verify2FAResponse {
+  success: boolean;
+  verified: boolean;
+  authMethod: string;
+  trustedBrowser: boolean;
+  trustedUntil: number | null;
+  deviceId: string | null;
+  message: string;
+}
+
+const ACCESS_TOKEN_STORAGE_KEY = 'supremeai_access_token';
+const REFRESH_TOKEN_STORAGE_KEY = 'supremeai_refresh_token';
+const AUTH_USER_STORAGE_KEY = 'supremeai_auth_user';
+const GUEST_TOKEN_STORAGE_KEY = 'supremeai_guest_token';
+const GUEST_TOKEN_EXP_STORAGE_KEY = 'supremeai_guest_token_exp';
+let memoryGuestToken: string | null = null;
+let memoryGuestTokenExp = 0;
+let inFlightGuestPromise: Promise<string | null> | null = null;
+
+export const AUTHORIZED_PROJECT_ADMIN_EMAILS: readonly string[] = [];
+
+export function isAuthorizedAdminEmail(email?: string | null): boolean {
+  if (!email || typeof email !== 'string') return false;
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail) return false;
+
+  if (AUTHORIZED_PROJECT_ADMIN_EMAILS.includes(cleanEmail)) return true;
+
+  const envAdminEmail = (import.meta as any)?.env?.VITE_ADMIN_EMAIL?.trim().toLowerCase();
+  if (envAdminEmail && cleanEmail === envAdminEmail) return true;
+
+  const envAdminEmails = (import.meta as any)?.env?.VITE_ADMIN_EMAILS;
+  if (envAdminEmails && typeof envAdminEmails === 'string') {
+    const list = envAdminEmails
+      .split(',')
+      .map((e: string) => e.trim().toLowerCase())
+      .filter(Boolean);
+    if (list.includes(cleanEmail)) return true;
+  }
+
+  return false;
+}
+
+const ADMIN_RBAC_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'root_admin', 'owner']);
+
+export function normalizeAuthUser(
+  data: any,
+  fallbackEmail?: string,
+  fallbackName?: string
+): AuthUser | null {
+  if (!data || typeof data !== 'object') return null;
+
+  const nestedUser = data.user && typeof data.user === 'object' ? data.user : {};
+  const raw = { ...data, ...nestedUser };
+
+  const email = String(raw.email || data.email || fallbackEmail || '')
+    .trim()
+    .toLowerCase();
+  const rbacCandidate = String(
+    raw.rbacRole || raw.rbac_role || raw.userRole || raw.user_role || raw.role || data.role || ''
+  )
+    .trim()
+    .toLowerCase();
+  const rolesArray = Array.isArray(raw.roles)
+    ? raw.roles.map((r: any) => String(r).trim().toLowerCase())
+    : [];
+
+  const adminEmailsList = [
+    ...(Array.isArray(data.adminEmails) ? data.adminEmails : []),
+    ...(Array.isArray(data.admin_emails) ? data.admin_emails : []),
+    ...(Array.isArray(raw.adminEmails) ? raw.adminEmails : []),
+    ...(Array.isArray(raw.admin_emails) ? raw.admin_emails : []),
+  ]
+    .map((item: any) => String(item).trim().toLowerCase())
+    .filter(Boolean);
+
+  const emailMatchedAdminDb =
+    Boolean(email && adminEmailsList.includes(email)) ||
+    Boolean(raw.adminEmailMatched ?? raw.admin_email_matched ?? data.adminEmailMatched);
+
+  const rbacIsAdmin =
+    ADMIN_RBAC_ROLES.has(rbacCandidate) || rolesArray.some((r: string) => ADMIN_RBAC_ROLES.has(r));
+
+  const explicitAdminFlag = Boolean(
+    raw.isAdminEligible ??
+    raw.is_admin_eligible ??
+    raw.isAdmin ??
+    raw.is_admin ??
+    data.isAdminEligible ??
+    data.is_admin_eligible ??
+    data.is_admin
+  );
+
+  const isAdminEligible = Boolean(
+    explicitAdminFlag || rbacIsAdmin || emailMatchedAdminDb || raw.adminUserId || raw.admin_user_id
+  );
+
+  const role: 'admin' | 'user' = isAdminEligible || rbacCandidate === 'admin' ? 'admin' : 'user';
+  const normalizedRbacRole: AuthUser['rbacRole'] = isAdminEligible
+    ? rbacCandidate === 'super_admin' || rbacCandidate === 'superadmin'
+      ? 'super_admin'
+      : 'admin'
+    : rbacCandidate === 'developer' || raw.isDeveloperEligible
+      ? 'developer'
+      : 'user';
+
+  const resolvedPlan = raw.plan || raw.tier || (isAdminEligible ? 'Enterprise' : 'Free');
+  const plan: AuthUser['plan'] =
+    resolvedPlan === 'Enterprise' || resolvedPlan === 'Free' || resolvedPlan === 'Pro'
+      ? resolvedPlan
+      : 'Free';
+
+  const resolvedEmail = email || String(raw.email || '').trim();
+  const resolvedName =
+    String(
+      raw.name || fallbackName || (resolvedEmail ? resolvedEmail.split('@')[0] : 'User')
+    ).trim() || 'User';
+
+  return {
+    id: String(raw.id || raw.user_id || data.user_id || `usr_${Date.now()}`),
+    name: resolvedName,
+    email: resolvedEmail,
+    avatar: raw.avatar ? String(raw.avatar) : resolvedName.charAt(0).toUpperCase(),
+    role,
+    rbacRole: normalizedRbacRole,
+    isAdminEligible,
+    isDeveloperEligible:
+      isAdminEligible || Boolean(raw.isDeveloperEligible ?? raw.is_developer_eligible),
+    adminUserId:
+      raw.adminUserId ||
+      raw.admin_user_id ||
+      (isAdminEligible ? String(raw.id || raw.user_id || 'admin_rbac') : undefined),
+    plan,
+    createdAt: String(raw.createdAt || raw.created_at || new Date().toISOString().slice(0, 10)),
+  };
+}
+
+export const authService = {
+  async login(email: string, password: string): Promise<LoginResponse> {
+    if (env.isMockEnabled) {
+      const cleanEmail = email.trim().toLowerCase();
+      const isAdmin = isAuthorizedAdminEmail(cleanEmail);
+      return {
+        success: true,
+        user: {
+          id: `usr_${Date.now()}`,
+          name: cleanEmail.split('@')[0] || 'User',
+          email: cleanEmail,
+          role: isAdmin ? 'admin' : 'user',
+          rbacRole: isAdmin ? 'admin' : 'user',
+          isAdminEligible: isAdmin,
+          isDeveloperEligible: isAdmin || cleanEmail.includes('dev'),
+          adminUserId: isAdmin ? 'admin_rbac' : undefined,
+          plan: isAdmin ? 'Enterprise' : 'Pro',
+          createdAt: new Date().toISOString().slice(0, 10),
+        },
+        token: `mock_tok_${Date.now()}`,
+      };
+    }
+
+    const data = await apiClient.post<any>('/api/v1/auth/login', {
+      username: email,
+      email,
+      password,
+    });
+    const token = data.access_token || data.token || '';
+    const user = normalizeAuthUser(data, email);
+    if (!user) {
+      throw new Error('Invalid authentication response from server.');
+    }
+
+    if (token) {
+      authService.persistSession(token, data.refresh_token || data.refreshToken);
+    }
+
+    return {
+      success: true,
+      user,
+      token,
+    };
+  },
+
+  async signup(
+    name: string,
+    email: string,
+    password: string,
+    plan: string = 'Pro',
+    isDeveloperEligible: boolean = false
+  ): Promise<LoginResponse> {
+    if (env.isMockEnabled) {
+      const cleanEmail = email.trim().toLowerCase();
+      const isAdmin = isAuthorizedAdminEmail(cleanEmail);
+      return {
+        success: true,
+        user: {
+          id: `usr_${Date.now()}`,
+          name,
+          email: cleanEmail,
+          role: isAdmin ? 'admin' : 'user',
+          rbacRole: isAdmin ? 'admin' : isDeveloperEligible ? 'developer' : 'user',
+          isAdminEligible: isAdmin,
+          isDeveloperEligible: isAdmin || isDeveloperEligible,
+          adminUserId: isAdmin ? 'admin_rbac' : undefined,
+          plan: plan as any,
+          createdAt: new Date().toISOString().slice(0, 10),
+        },
+        token: `mock_tok_${Date.now()}`,
+      };
+    }
+
+    const data = await apiClient.post<any>('/api/v1/auth/register', {
+      username: email,
+      email,
+      password,
+      name,
+      plan,
+      isDeveloperEligible,
+      workspaceFocus: isDeveloperEligible ? 'developer' : 'everyday',
+    });
+    const token = data.access_token || data.token || '';
+    const normalized = normalizeAuthUser(data, email, name);
+    if (!normalized) {
+      throw new Error('Invalid registration response from server.');
+    }
+    const user: AuthUser = {
+      ...normalized,
+      isDeveloperEligible: normalized.isDeveloperEligible || isDeveloperEligible,
+    };
+
+    if (token) {
+      authService.persistSession(token, data.refresh_token || data.refreshToken);
+    }
+
+    return {
+      success: true,
+      user,
+      token,
+    };
+  },
+
+  async getMe(): Promise<AuthUser | null> {
+    try {
+      const data = await apiClient.get<any>('/api/v1/auth/me');
+      return normalizeAuthUser(data);
+    } catch {
+      return null;
+    }
+  },
+
+  async logout(): Promise<void> {
+    try {
+      if (!env.isMockEnabled) {
+        await apiClient.post('/api/v1/auth/logout');
+      }
+    } catch (error) {
+      logger.debug('authService: suppressed non-fatal error', error);
+    }
+    localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+    localStorage.removeItem(AUTH_USER_STORAGE_KEY);
+    authService.clearGuestToken();
+  },
+
+  /** Stores a freshly issued access token (and rotated refresh token). */
+  persistSession(accessToken: string, refreshToken?: string | null): void {
+    try {
+      localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, accessToken);
+      if (refreshToken) {
+        localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, String(refreshToken));
+      }
+      const userRaw = localStorage.getItem(AUTH_USER_STORAGE_KEY);
+      if (userRaw) {
+        const user = JSON.parse(userRaw);
+        if (user && typeof user === 'object') {
+          user.token = accessToken;
+          localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(user));
+        }
+      }
+      authService.clearGuestToken();
+    } catch {
+      // Storage can be unavailable (private mode); the in-memory token is
+      // still used by the current request cycle.
+    }
+  },
+
+  /**
+   * Exchanges the stored refresh token (or the httpOnly session cookie) for a
+   * new access token. Returns null when the session cannot be recovered.
+   */
+  async refreshAccessToken(): Promise<string | null> {
+    if (env.isMockEnabled) return null;
+
+    let refreshToken: string | null = null;
+    try {
+      refreshToken = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
+    } catch {
+      refreshToken = null;
+    }
+
+    try {
+      const data = await apiClient.post<any>(
+        '/api/v1/auth/refresh',
+        refreshToken ? { refresh_token: refreshToken } : {},
+        { skipAuth: true, skipRefresh: true, credentials: 'include', timeoutMs: 10000 }
+      );
+      const token = data?.access_token || data?.token || '';
+      if (!token) return null;
+      authService.persistSession(token, data?.refresh_token || data?.refreshToken);
+      return token;
+    } catch {
+      return null;
+    }
+  },
+
+  getCachedGuestToken(): string | null {
+    const now = Date.now();
+    const safetyWindowMs = 60_000;
+    if (memoryGuestToken && memoryGuestTokenExp - safetyWindowMs > now) {
+      return memoryGuestToken;
+    }
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        const stored = sessionStorage.getItem(GUEST_TOKEN_STORAGE_KEY);
+        const storedExp = Number(sessionStorage.getItem(GUEST_TOKEN_EXP_STORAGE_KEY) || '0');
+        if (stored && storedExp - safetyWindowMs > now) {
+          memoryGuestToken = stored;
+          memoryGuestTokenExp = storedExp;
+          return stored;
+        }
+      }
+    } catch {
+      // sessionStorage unavailable
+    }
+    return null;
+  },
+
+  getInFlightGuestTokenPromise(): Promise<string | null> | null {
+    return inFlightGuestPromise;
+  },
+
+  clearGuestToken(): void {
+    memoryGuestToken = null;
+    memoryGuestTokenExp = 0;
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.removeItem(GUEST_TOKEN_STORAGE_KEY);
+        sessionStorage.removeItem(GUEST_TOKEN_EXP_STORAGE_KEY);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  },
+
+  async ensureGuestToken(forceRefresh: boolean = false): Promise<string | null> {
+    if (!forceRefresh) {
+      const cached = authService.getCachedGuestToken();
+      if (cached) return cached;
+      if (inFlightGuestPromise) return inFlightGuestPromise;
+    } else {
+      authService.clearGuestToken();
+    }
+
+    let requestPromise: Promise<string | null> | null = null;
+    requestPromise = (async (): Promise<string | null> => {
+      try {
+        const endpoint = `${env.apiBaseUrl}/api/v1/auth/guest`;
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { Accept: 'application/json' },
+          credentials: 'same-origin',
+        });
+        if (!response.ok) return null;
+
+        const data = await response.json().catch(() => null);
+        const guestToken =
+          typeof data?.access_token === 'string' && data.access_token.trim()
+            ? data.access_token.trim()
+            : typeof data?.token === 'string' && data.token.trim()
+              ? data.token.trim()
+              : null;
+
+        if (!guestToken) return null;
+
+        const ttlSeconds = Math.max(60, Number(data?.expires_in) || 3600);
+        const expiresAt = Date.now() + ttlSeconds * 1000;
+        memoryGuestToken = guestToken;
+        memoryGuestTokenExp = expiresAt;
+        try {
+          if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem(GUEST_TOKEN_STORAGE_KEY, guestToken);
+            sessionStorage.setItem(GUEST_TOKEN_EXP_STORAGE_KEY, String(expiresAt));
+          }
+        } catch {
+          // ignore storage errors
+        }
+        return guestToken;
+      } catch {
+        return null;
+      } finally {
+        if (inFlightGuestPromise === requestPromise) {
+          inFlightGuestPromise = null;
+        }
+      }
+    })();
+
+    inFlightGuestPromise = requestPromise;
+    return requestPromise;
+  },
+
+  async getTotpStatus(userEmail: string): Promise<{
+    enrolled: boolean;
+    source: 'env' | 'user_vault' | 'none';
+    issuer: string;
+    accountName: string;
+  }> {
+    return apiClient.get(`/api/auth/totp/status?userEmail=${encodeURIComponent(userEmail)}`);
+  },
+
+  async setupTotp(payload: { userEmail: string; currentToken?: string }): Promise<{
+    success: boolean;
+    secret: string;
+    otpauthUrl: string;
+    qrDataUrl: string;
+    issuer: string;
+    accountName: string;
+  }> {
+    return apiClient.post('/api/auth/totp/setup', payload);
+  },
+
+  async confirmTotp(payload: {
+    userEmail: string;
+    token: string;
+    trustFor7Days: boolean;
+  }): Promise<Verify2FAResponse> {
+    return apiClient.post<Verify2FAResponse>('/api/auth/totp/confirm', payload);
+  },
+
+  async verify2FA(payload: {
+    token: string;
+    method: 'totp';
+    trustFor7Days: boolean;
+    userEmail: string;
+  }): Promise<Verify2FAResponse> {
+    return apiClient.post<Verify2FAResponse>('/api/auth/verify-2fa', payload);
+  },
+
+  async verifyAdminPasskey(
+    passkey: string
+  ): Promise<{ success: boolean; authenticated: boolean; role: string }> {
+    return apiClient.post('/api/admin/auth/verify', { passkey });
+  },
+};
+
+// Injected into the API client so a 401 triggers exactly one refresh attempt;
+// injected rather than imported to keep apiClient → authService acyclic.
+apiClient.registerRefreshHandler(() => authService.refreshAccessToken());

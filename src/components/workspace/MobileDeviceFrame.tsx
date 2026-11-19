@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Home, RotateCw, RefreshCw, ExternalLink } from 'lucide-react';
-import { useI18n } from '../../i18n';
+import { useI18n } from '../../utils/i18n';
 
 interface MobileDeviceFrameProps {
   orientation?: 'portrait' | 'landscape';

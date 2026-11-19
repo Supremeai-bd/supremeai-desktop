@@ -21,7 +21,7 @@ import {
   SurfaceTone,
   ScrimIntensity,
 } from '../../stores/useThemeStore';
-import { useI18n } from '../../i18n';
+import { useI18n } from '../../utils/i18n';
 
 interface ThemeControlPopoverProps {
   compact?: boolean;
@@ -447,7 +447,7 @@ export const ThemeControlPopover: React.FC<ThemeControlPopoverProps> = ({
         return (
           <div>
             <div className="text-[10px] font-medium text-slate-500 dark:text-slate-400 mb-1">
-              {t.themeOptionOceanWaves}
+              {t.themeOptionOceanWave}
             </div>
             <div className="grid grid-cols-3 gap-1">
               {(['calm', 'rolling', 'choppy'] as const).map((opt) => (
@@ -630,7 +630,7 @@ export const ThemeControlPopover: React.FC<ThemeControlPopoverProps> = ({
                   {/* Surface Tone: Adaptive vs B&W */}
                   <div>
                     <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
-                      {t.themeControlSurfaceColors}
+                      {t.themeControlSurfaceColor}
                     </div>
                     <div className="grid grid-cols-2 gap-1">
                       {[

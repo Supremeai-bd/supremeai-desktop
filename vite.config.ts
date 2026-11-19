@@ -1,29 +1,61 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import react from '@vitejs/plugin-react';
+import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { defineConfig } from 'vite';
 
-// Single source of truth for the version shown in Settings and sent with
-// feedback events: package.json (kept in step with src-tauri/tauri.conf.json).
-const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8')) as {
-  version: string;
-};
+const pkg = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8')
+) as { version: string };
 
-export default defineConfig({
-  base: './',
-  plugins: [react(), tailwindcss()],
-  clearScreen: false,
-  define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
-  },
-  server: {
-    host: '0.0.0.0',
-    port: 3000,
-    strictPort: true,
-  },
-  build: {
-    outDir: 'dist',
-    emptyOutDir: true,
-  },
+export default defineConfig(() => {
+  const isTauriBuild = Boolean(process.env.TAURI_ENV_PLATFORM);
+
+  return {
+    base: isTauriBuild ? './' : '/',
+    plugins: [react(), tailwindcss()],
+    clearScreen: false,
+    define: {
+      __APP_VERSION__: JSON.stringify(pkg.version),
+    },
+    resolve: {
+      alias: {
+        '@': path.resolve(import.meta.dirname, '.'),
+      },
+    },
+    build: {
+      outDir: 'dist',
+      emptyOutDir: true,
+      rollupOptions: {
+        output: {
+          manualChunks(id: string) {
+            if (
+              id.includes('node_modules/react/') ||
+              id.includes('node_modules/react-dom/') ||
+              id.includes('node_modules/scheduler/')
+            ) {
+              return 'vendor-react';
+            }
+            if (id.includes('node_modules/firebase/') || id.includes('node_modules/@firebase/')) {
+              return 'vendor-firebase';
+            }
+            if (id.includes('node_modules/three')) return 'vendor-three';
+            if (id.includes('node_modules/recharts') || id.includes('node_modules/d3-')) {
+              return 'vendor-charts';
+            }
+            if (id.includes('node_modules/@xterm')) return 'vendor-xterm';
+            if (id.includes('node_modules/lucide-react')) return 'vendor-icons';
+          },
+        },
+      },
+    },
+    server: {
+      host: '0.0.0.0',
+      port: 3000,
+      allowedHosts: true as const,
+      hmr: process.env.DISABLE_HMR !== 'true',
+      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+    },
+  };
 });

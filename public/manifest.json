@@ -1,0 +1,21 @@
+{
+  "name": "SupremeAI Studio",
+  "short_name": "SupremeAI",
+  "description": "Ultra-light, high-performance bilingual AI workspace and developer studio powered by SupremeAI models.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#0f172a",
+  "background_color": "#020617",
+  "lang": "en",
+  "categories": ["productivity", "developer", "utilities"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

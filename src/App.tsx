@@ -1,330 +1,315 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useState, useEffect, useRef } from 'react';
 import {
-  Download,
-  GitFork,
-  MoreVertical,
   PanelLeft,
   PanelRight,
-  Pin,
-  Plus,
-  Search,
-  Sparkles,
-  Square,
+  Download,
   Trash2,
-  Volume2,
+  Share2,
+  GitFork,
+  AlertTriangle,
   X,
+  Lock,
+  UserCheck,
+  ShieldCheck,
+  Megaphone,
+  ArrowLeft,
+  Home,
+  Pin,
+  LogIn,
+  MoreVertical,
+  Search,
+  ChevronRight,
 } from 'lucide-react';
-import AdminDashboard from './admin/AdminDashboard';
-import { LiveVoicePanel } from './companion/LiveVoicePanel';
-import { ChatEmptyState } from './components/ChatEmptyState';
-import { ChatInput } from './components/ChatInput';
-import { ChatThread } from './components/ChatThread';
-import { CommandPalette } from './components/CommandPalette';
-import FeedbackWidget from './components/FeedbackWidget';
+import { WorkspaceTipBar, WorkspaceMicroSurvey } from './components/chat/WorkspaceTipsAndSurvey';
+import { shareService } from './services/shareService';
+import { decodeArtifactSharePayload } from './utils/previewShare';
 import { Sidebar } from './components/Sidebar';
+import { ChatThread } from './components/ChatThread';
+import { ChatEmptyState } from './components/chat/ChatEmptyState';
+import { ChatInput } from './components/ChatInput';
+import { useLiveVoiceSession } from './hooks/useLiveVoiceSession';
+import { isAuthorizedAdminEmail } from './services/authService';
+import { useHitlApproval } from './hooks/useHitlApproval';
+import { ToastContainer } from './components/common/ToastContainer';
+import { toast } from './stores/useToastStore';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { RealtimeSyncClient, loadSyncEnabled, type SyncThemePayload } from './sync/realtimeSync';
+import { IntentClarificationCard } from './components/chat/IntentClarificationCard';
 import {
-  ChatHistoryView,
-  KnowledgeView,
-  ProjectsView,
-  RolesView,
-  SettingsView,
-} from './components/StudioViews';
-import { LiveScreenBackdrop } from './components/theme/LiveScreenBackdrop';
-import { UserPluginsView } from './components/user/UserPluginsView';
-import { WorkspaceDock } from './components/WorkspaceDock';
-import { isDesktopTauri, sendDesktopChat } from './bridge/desktopBridge';
-import {
-  DEFAULT_KNOWLEDGE_DOCS,
-  DEFAULT_PROJECTS,
-  DEFAULT_WORKSPACE_FILES,
-  STUDIO_MODELS,
-  SYSTEM_ROLES,
-} from './data/studioData';
-import { INITIAL_PLUGINS } from './data/userPlugins';
-import { useSpeech } from './hooks/useSpeech';
-import { useI18n } from './i18n';
+  orchestrateUserIntent,
+  type DashboardActionType,
+  type PendingClarification,
+} from './services/intentOrchestrator';
+
+const ChatHistoryView = React.lazy(() =>
+  import('./components/chat/ChatHistoryView').then((m) => ({ default: m.ChatHistoryView }))
+);
+const LiveVoicePanel = React.lazy(() =>
+  import('./components/chat/LiveVoicePanel').then((m) => ({ default: m.LiveVoicePanel }))
+);
+const WorkspaceDock = React.lazy(() =>
+  import('./components/workspace/WorkspaceDock').then((m) => ({ default: m.WorkspaceDock }))
+);
+const RoleModal = React.lazy(() =>
+  import('./components/RoleModal').then((m) => ({ default: m.RoleModal }))
+);
+const RoleLab = React.lazy(() =>
+  import('./components/RoleLab').then((m) => ({ default: m.RoleLab }))
+);
+const ModelMatrix = React.lazy(() =>
+  import('./components/ModelMatrix').then((m) => ({ default: m.ModelMatrix }))
+);
+const RepoHub = React.lazy(() =>
+  import('./components/RepoHub').then((m) => ({ default: m.RepoHub }))
+);
+const FederationSyncView = React.lazy(() =>
+  import('./components/sync/FederationSyncView').then((m) => ({ default: m.FederationSyncView }))
+);
+const UserProjectsView = React.lazy(() =>
+  import('./components/user/UserProjectsView').then((m) => ({ default: m.UserProjectsView }))
+);
+const UserPluginsView = React.lazy(() =>
+  import('./components/user/UserPluginsView').then((m) => ({ default: m.UserPluginsView }))
+);
+const UserSettingsView = React.lazy(() =>
+  import('./components/user/UserSettingsView').then((m) => ({ default: m.UserSettingsView }))
+);
+const UserApiKeysView = React.lazy(() =>
+  import('./components/user/UserApiKeysView').then((m) => ({ default: m.UserApiKeysView }))
+);
+const UserKnowledgeBaseView = React.lazy(() =>
+  import('./components/user/UserKnowledgeBaseView').then((m) => ({
+    default: m.UserKnowledgeBaseView,
+  }))
+);
+const UserTeamView = React.lazy(() =>
+  import('./components/user/UserTeamView').then((m) => ({ default: m.UserTeamView }))
+);
+const UserPlanUsageView = React.lazy(() =>
+  import('./components/user/UserPlanUsageView').then((m) => ({ default: m.UserPlanUsageView }))
+);
+const UsageView = React.lazy(() =>
+  import('./components/UsageView').then((m) => ({ default: m.UsageView }))
+);
+const PromptLibraryModal = React.lazy(() =>
+  import('./components/user/PromptLibraryModal').then((m) => ({ default: m.PromptLibraryModal }))
+);
+const AuthPage = React.lazy(() =>
+  import('./components/auth/AuthPage').then((m) => ({ default: m.AuthPage }))
+);
+const AdminOverviewView = React.lazy(() =>
+  import('./components/admin/AdminOverviewView').then((m) => ({ default: m.AdminOverviewView }))
+);
+const AdminArchitectureTopologyView = React.lazy(() =>
+  import('./components/admin/AdminArchitectureTopologyView').then((m) => ({
+    default: m.AdminArchitectureTopologyView,
+  }))
+);
+const AdminVisualCockpitView = React.lazy(() =>
+  import('./components/admin/AdminVisualCockpitView').then((m) => ({
+    default: m.AdminVisualCockpitView,
+  }))
+);
+const AdminGitHubPipelineView = React.lazy(() =>
+  import('./components/admin/AdminGitHubPipelineView').then((m) => ({
+    default: m.AdminGitHubPipelineView,
+  }))
+);
+const AdminCustomersView = React.lazy(() =>
+  import('./components/admin/AdminCustomersView').then((m) => ({ default: m.AdminCustomersView }))
+);
+const AdminMcpTowerView = React.lazy(() =>
+  import('./components/admin/AdminMcpTowerView').then((m) => ({ default: m.AdminMcpTowerView }))
+);
+const AdminAgentSwarmView = React.lazy(() =>
+  import('./components/admin/AdminAgentSwarmView').then((m) => ({ default: m.AdminAgentSwarmView }))
+);
+const AdminTaskQueueView = React.lazy(() =>
+  import('./components/admin/AdminTaskQueueView').then((m) => ({ default: m.AdminTaskQueueView }))
+);
+const AdminSchemaParityView = React.lazy(() =>
+  import('./components/admin/AdminSchemaParityView').then((m) => ({
+    default: m.AdminSchemaParityView,
+  }))
+);
+const AdminLlmGatewayView = React.lazy(() =>
+  import('./components/admin/AdminLlmGatewayView').then((m) => ({ default: m.AdminLlmGatewayView }))
+);
+const AdminSecurityView = React.lazy(() =>
+  import('./components/admin/AdminSecurityView').then((m) => ({ default: m.AdminSecurityView }))
+);
+const AdminSystemAuditView = React.lazy(() =>
+  import('./components/admin/AdminSystemAuditView').then((m) => ({
+    default: m.AdminSystemAuditView,
+  }))
+);
+const AdminFeatureFlagsView = React.lazy(() =>
+  import('./components/admin/AdminFeatureFlagsView').then((m) => ({
+    default: m.AdminFeatureFlagsView,
+  }))
+);
+const AdminProviderKeysView = React.lazy(() =>
+  import('./components/admin/AdminProviderKeysView').then((m) => ({
+    default: m.AdminProviderKeysView,
+  }))
+);
+const AdminAuthModal = React.lazy(() =>
+  import('./components/admin/AdminAuthModal').then((m) => ({ default: m.AdminAuthModal }))
+);
+const AdminTwoFactorModal = React.lazy(() =>
+  import('./components/admin/AdminTwoFactorModal').then((m) => ({ default: m.AdminTwoFactorModal }))
+);
+const HitlApprovalModal = React.lazy(() =>
+  import('./components/admin/HitlApprovalModal').then((m) => ({ default: m.HitlApprovalModal }))
+);
+const ControlCenterSafetyGateModal = React.lazy(() =>
+  import('./components/admin/ControlCenterSafetyGateModal').then((m) => ({
+    default: m.ControlCenterSafetyGateModal,
+  }))
+);
+const ControlCenterHitlPoliciesView = React.lazy(() =>
+  import('./components/admin/ControlCenterHitlPoliciesView').then((m) => ({
+    default: m.ControlCenterHitlPoliciesView,
+  }))
+);
+const ControlCenterReleaseGateView = React.lazy(() =>
+  import('./components/admin/ControlCenterReleaseGateView').then((m) => ({
+    default: m.ControlCenterReleaseGateView,
+  }))
+);
+const ControlCenterAgentBridgeView = React.lazy(() =>
+  import('./components/admin/ControlCenterAgentBridgeView').then((m) => ({
+    default: m.ControlCenterAgentBridgeView,
+  }))
+);
+const ControlCenterMemoryGraphView = React.lazy(() =>
+  import('./components/admin/ControlCenterMemoryGraphView').then((m) => ({
+    default: m.ControlCenterMemoryGraphView,
+  }))
+);
+const ControlCenterComputeFleetView = React.lazy(() =>
+  import('./components/admin/ControlCenterComputeFleetView').then((m) => ({
+    default: m.ControlCenterComputeFleetView,
+  }))
+);
+const ControlCenterFinOpsOmnichannelView = React.lazy(() =>
+  import('./components/admin/ControlCenterFinOpsOmnichannelView').then((m) => ({
+    default: m.ControlCenterFinOpsOmnichannelView,
+  }))
+);
+const ControlCenterHealthMonitorView = React.lazy(() =>
+  import('./components/admin/ControlCenterHealthMonitorView').then((m) => ({
+    default: m.ControlCenterHealthMonitorView,
+  }))
+);
+
+import { useAuthStore } from './stores/useAuthStore';
+import { useAppPreferencesStore } from './stores/useAppPreferencesStore';
+import { useChatStore } from './stores/useChatStore';
+import { useAdminStore } from './stores/useAdminStore';
+import { useCustomerStore } from './stores/useCustomerStore';
+import { useWorkspaceStore } from './stores/useWorkspaceStore';
 import { useThemeStore } from './stores/useThemeStore';
-import {
-  RealtimeSyncClient,
-  loadLastSyncedAt,
-  loadSyncEnabled,
-  mergeSyncedChats,
-  saveSyncEnabled,
-  type SyncThemePayload,
-} from './sync/realtimeSync';
-import type {
-  ActiveTab,
-  ChatAttachment,
-  ChatMessage,
-  DesktopProject,
-  GatewayStatus,
-  KnowledgeDoc,
-  ModelOption,
-  PluginItem,
-  RolePersona,
-  SavedChat,
-  WorkspaceDockTab,
-  WorkspaceFile,
-} from './types/studio';
+import { usePlatformStore } from './stores/usePlatformStore';
+import { useControlCenterStore } from './stores/useControlCenterStore';
+import { useTabRouter } from './hooks/useTabRouter';
+import { useMcpTelemetry } from './hooks/useMcpTelemetry';
+import { useFederationBootstrap } from './hooks/useFederationSync';
+import { SyncStatusPill } from './components/sync/SyncStatusPill';
+import { useOsThemeSync } from './hooks/useOsThemeSync';
+import { LiveScreenBackdrop } from './components/theme/LiveScreenBackdrop';
+import { AdminConsoleNav } from './components/admin/AdminConsoleNav';
+import { UserProject, ChatAttachment } from './types';
+import { useI18n } from './utils/i18n';
+import { executeScheduledTaskOnce, loadScheduledTasks } from './services/browserVaultService';
+import { getCronMinuteKey, matchesCronAtDate } from './shared/cronMatcher';
 
-const HISTORY_KEY = 'supremeai.desktop.history.v1';
-const ROLES_KEY = 'supremeai.desktop.custom_roles.v1';
-const PROJECTS_KEY = 'supremeai.desktop.projects.v1';
-const KNOWLEDGE_KEY = 'supremeai.desktop.knowledge.v1';
-const PLUGINS_KEY = 'supremeai.desktop.plugins.v1';
+const ADMIN_ONLY_TABS = new Set([
+  'admin-overview',
+  'hitl-policies',
+  'release-gate',
+  'external-agents',
+  'memory-graph',
+  'compute-fleet',
+  'finops-omnichannel',
+  'health-monitor',
+  'architecture-map',
+  'visual-cockpit',
+  'github-pipeline',
+  'mcp-tower',
+  'agent-swarm',
+  'task-queue',
+  'schema-parity',
+  'llm-gateway',
+  'feature-flags',
+  'provider-keys',
+  'security',
+  'system-audit',
+  'customers',
+  'models',
+  'roles',
+  'repos',
+]);
 
-function newId(prefix = 'id') {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
+const DEV_ONLY_TABS = new Set(['user-projects', 'user-api-keys', 'user-plugins']);
 
-function shortTitle(messages: ChatMessage[], fallback: string) {
-  return (messages.find((m) => m.role === 'user')?.content || fallback)
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 62);
-}
-
-function loadChats(fallbackTitle: string): SavedChat[] {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as SavedChat[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((item) => item && typeof item.id === 'string' && Array.isArray(item.messages))
-      .map((item) => ({
-        id: item.id,
-        title: typeof item.title === 'string' && item.title.trim() ? item.title : fallbackTitle,
-        updatedAt:
-          typeof item.updatedAt === 'number' && Number.isFinite(item.updatedAt)
-            ? item.updatedAt
-            : Date.now(),
-        createdAt:
-          typeof item.createdAt === 'number' && Number.isFinite(item.createdAt)
-            ? item.createdAt
-            : Date.now(),
-        isPinned: Boolean(item.isPinned),
-        roleId: item.roleId,
-        modelId: item.modelId,
-        messages: item.messages
-          .filter(
-            (m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string'
-          )
-          .map((m) => ({
-            id: typeof m.id === 'string' ? m.id : newId('msg'),
-            role: m.role,
-            content: m.content,
-            timestamp: typeof m.timestamp === 'number' ? m.timestamp : Date.now(),
-            modelId: m.modelId,
-            ...(m.state === 'error'
-              ? { state: 'error' as const, retryPrompt: m.retryPrompt }
-              : {}),
-          })),
-      }));
-  } catch {
-    return [];
-  }
-}
-
-function loadJson<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
+const SUBVIEW_TITLES: Record<string, string> = {
+  'chat-history': 'All Conversations',
+  'user-projects': 'My Projects',
+  'user-api-keys': 'API Keys & Providers',
+  'user-knowledge': 'Knowledge Base',
+  'user-team': 'Team & Members',
+  'user-billing': 'Plan & Usage',
+  usage: 'Usage Analytics',
+  'user-plugins': 'Plugins & Tools',
+  'user-settings': 'Account & Workspace Settings',
+  'admin-overview': 'Central Control Center',
+  'hitl-policies': 'HITL Approvals & Policies',
+  'release-gate': 'Release Gate & Render Deploy',
+  'external-agents': 'External Agents & Bridge',
+  'memory-graph': 'Memory, Qdrant & AST Graph',
+  'compute-fleet': 'Kaggle GPU & CDP Browser Audit',
+  'finops-omnichannel': 'FinOps Mesh, Telegram & Cron',
+  'health-monitor': 'MCP Resource & Latency Monitor',
+  'agent-swarm': 'Autonomous Agent Swarm',
+  'task-queue': 'Distributed Task Queue',
+  'schema-parity': 'Schema Parity Matrix',
+  'llm-gateway': 'LLM Gateway & Pricing',
+  'feature-flags': 'Feature Flags',
+  'provider-keys': 'Provider API Keys & Infisical Vault',
+  security: 'Security & Firewall',
+  'system-audit': 'System Audit Log',
+  customers: 'Customer Directory',
+  'mcp-tower': 'MCP Service Tower',
+  roles: 'Roles & Gems Lab',
+  models: 'Model Matrix',
+  repos: 'Ecosystem Repos',
+  'live-sync': 'Live Data Fabric',
+};
 
 export default function App() {
-  const { t, lang, setLang } = useI18n();
-  const {
-    speak,
-    stop: stopSpeaking,
-    speaking,
-    config: voiceConfig,
-    updateConfig: updateVoiceConfig,
-  } = useSpeech();
-  const resolvedScheme = useThemeStore((s) => s.resolvedScheme);
-  const setThemeMode = useThemeStore((s) => s.setThemeMode);
-  const setOsPrefersDark = useThemeStore((s) => s.setOsPrefersDark);
-  const setPrefersReducedMotion = useThemeStore((s) => s.setPrefersReducedMotion);
+  useOsThemeSync();
+  useFederationBootstrap();
 
-  // Sync OS dark mode & reduced-motion preferences into useThemeStore
+  // Cross-device Real-Time Sync (Web <-> Desktop Tauri <-> Android)
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return;
-    const darkMq = window.matchMedia('(prefers-color-scheme: dark)');
-    const motionMq = window.matchMedia('(prefers-reduced-motion: reduce)');
-
-    setOsPrefersDark(darkMq.matches, false);
-    setPrefersReducedMotion(motionMq.matches);
-
-    const onDarkChange = (e: MediaQueryListEvent) => setOsPrefersDark(e.matches, true);
-    const onMotionChange = (e: MediaQueryListEvent) => setPrefersReducedMotion(e.matches);
-
-    darkMq.addEventListener('change', onDarkChange);
-    motionMq.addEventListener('change', onMotionChange);
-    return () => {
-      darkMq.removeEventListener('change', onDarkChange);
-      motionMq.removeEventListener('change', onMotionChange);
-    };
-  }, [setOsPrefersDark, setPrefersReducedMotion]);
-
-  const [savedChats, setSavedChats] = useState<SavedChat[]>(() => loadChats(t.newConversation));
-  const [conversationId, setConversationId] = useState<string>(() => newId('conv'));
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [activeTab, setActiveTab] = useState<ActiveTab>('chat');
-  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() =>
-    typeof window !== 'undefined' ? window.innerWidth >= 960 : true
-  );
-  const [activeModel, setActiveModel] = useState<ModelOption>(STUDIO_MODELS[0]);
-  const [customRoles, setCustomRoles] = useState<RolePersona[]>(() =>
-    loadJson<RolePersona[]>(ROLES_KEY, [])
-  );
-  const allRoles = useMemo(() => [...SYSTEM_ROLES, ...customRoles], [customRoles]);
-  const [activeRoleId, setActiveRoleId] = useState<string>(SYSTEM_ROLES[0].id);
-  const activeRole = useMemo(
-    () => allRoles.find((r) => r.id === activeRoleId) ?? SYSTEM_ROLES[0],
-    [allRoles, activeRoleId]
-  );
-
-  const [projects, setProjects] = useState<DesktopProject[]>(() =>
-    loadJson<DesktopProject[]>(PROJECTS_KEY, DEFAULT_PROJECTS)
-  );
-  const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDoc[]>(() =>
-    loadJson<KnowledgeDoc[]>(KNOWLEDGE_KEY, DEFAULT_KNOWLEDGE_DOCS)
-  );
-  const [plugins, setPlugins] = useState<PluginItem[]>(() =>
-    loadJson<PluginItem[]>(PLUGINS_KEY, INITIAL_PLUGINS)
-  );
-  const activeKnowledgeDocs = useMemo(
-    () => knowledgeDocs.filter((d) => d.enabled),
-    [knowledgeDocs]
-  );
-  const activePluginsCount = useMemo(
-    () => plugins.filter((p) => p.isEnabled).length,
-    [plugins]
-  );
-
-  // Workspace Dock state (Preview / Monaco Code / xterm.js Terminal)
-  const [dockOpen, setDockOpen] = useState(false);
-  const [dockTab, setDockTab] = useState<WorkspaceDockTab>('preview');
-  const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>(DEFAULT_WORKSPACE_FILES);
-  const [activeFileId, setActiveFileId] = useState<string>(DEFAULT_WORKSPACE_FILES[0].id);
-
-  // UI overlays & chat controls
-  const [draft, setDraft] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState('');
-  const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('idle');
-  const [sessionEmail, setSessionEmail] = useState<string | null>(null);
-  const [commandOpen, setCommandOpen] = useState(false);
-  const [adminOpen, setAdminOpen] = useState(false);
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [hologramOpen, setHologramOpen] = useState(false);
-  const [chatMenuOpen, setChatMenuOpen] = useState(false);
-  const [chatSearchOpen, setChatSearchOpen] = useState(false);
-  const [chatSearchQuery, setChatSearchQuery] = useState('');
-  const [syncEnabled, setSyncEnabled] = useState<boolean>(() => loadSyncEnabled());
-  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(() => loadLastSyncedAt());
-
-  const abortRef = useRef<AbortController | null>(null);
-  const threadEndRef = useRef<HTMLDivElement>(null);
-  const chatMenuRef = useRef<HTMLDivElement>(null);
-  const syncClientRef = useRef<RealtimeSyncClient | null>(null);
-  const applyingRemoteSyncRef = useRef(false);
-
-  const runtimeLabel = isDesktopTauri() ? 'Tauri v2 Native Desktop' : 'Desktop Studio Preview';
-  const currentChatMeta = useMemo(
-    () => savedChats.find((c) => c.id === conversationId),
-    [savedChats, conversationId]
-  );
-  const userMessageCount = messages.filter((m) => m.role === 'user').length;
-  const userName = sessionEmail
-    ? sessionEmail.split('@')[0].replace(/^\w/, (c) => c.toUpperCase())
-    : t.emptyGreetingGuest;
-
-  // Persist chats, roles, projects, knowledge docs
-  useEffect(() => {
-    try {
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(savedChats));
-    } catch {
-      // Ignore storage failure
-    }
-  }, [savedChats]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(ROLES_KEY, JSON.stringify(customRoles));
-    } catch {
-      // Ignore storage failure
-    }
-  }, [customRoles]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
-    } catch {
-      // Ignore storage failure
-    }
-  }, [projects]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(KNOWLEDGE_KEY, JSON.stringify(knowledgeDocs));
-    } catch {
-      // Ignore storage failure
-    }
-  }, [knowledgeDocs]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(PLUGINS_KEY, JSON.stringify(plugins));
-    } catch {
-      // Ignore storage failure
-    }
-    if (syncEnabled && !applyingRemoteSyncRef.current) {
-      syncClientRef.current?.publish('plugins', plugins);
-    }
-  }, [plugins, syncEnabled]);
-
-  // Cross-Device Real-Time Sync engine (Web + Desktop + Android)
-  useEffect(() => {
-    if (!syncEnabled) {
-      syncClientRef.current?.stop();
-      syncClientRef.current = null;
-      return;
-    }
-
+    if (!loadSyncEnabled()) return;
+    let applyingRemote = false;
     const client = new RealtimeSyncClient({
-      onSyncActivity: (ts) => setLastSyncedAt(ts),
       onEnvelope: (envelope) => {
-        applyingRemoteSyncRef.current = true;
-        try {
-          if (envelope.domain === 'chats' && Array.isArray(envelope.payload)) {
-            const incoming = envelope.payload as SavedChat[];
-            setSavedChats((prev) => mergeSyncedChats(prev, incoming));
-          } else if (envelope.domain === 'roles' && Array.isArray(envelope.payload)) {
-            setCustomRoles(envelope.payload as RolePersona[]);
-          } else if (envelope.domain === 'knowledge' && Array.isArray(envelope.payload)) {
-            setKnowledgeDocs(envelope.payload as KnowledgeDoc[]);
-          } else if (envelope.domain === 'plugins' && Array.isArray(envelope.payload)) {
-            setPlugins(envelope.payload as PluginItem[]);
-          } else if (envelope.domain === 'theme' && envelope.payload && typeof envelope.payload === 'object') {
-            useThemeStore.getState().applyRemoteThemeConfig(envelope.payload as SyncThemePayload);
-          }
-        } finally {
+        if (envelope.domain === 'theme' && envelope.payload && typeof envelope.payload === 'object') {
+          applyingRemote = true;
+          useThemeStore.getState().applyRemoteThemeConfig(envelope.payload as SyncThemePayload);
           window.setTimeout(() => {
-            applyingRemoteSyncRef.current = false;
+            applyingRemote = false;
           }, 50);
         }
       },
     });
-    syncClientRef.current = client;
     client.start();
 
     const unsubTheme = useThemeStore.subscribe((state, prev) => {
-      if (applyingRemoteSyncRef.current) return;
+      if (applyingRemote) return;
       if (
         state.themeMode !== prev.themeMode ||
         state.liveTheme !== prev.liveTheme ||
@@ -347,865 +332,1758 @@ export default function App() {
     return () => {
       unsubTheme();
       client.stop();
-      syncClientRef.current = null;
     };
-  }, [syncEnabled, sessionEmail]);
-
-  // Publish chats, custom roles, and knowledge changes to sync engine
-  useEffect(() => {
-    if (!syncEnabled || applyingRemoteSyncRef.current || savedChats.length === 0) return;
-    syncClientRef.current?.publish('chats', savedChats);
-  }, [savedChats, syncEnabled]);
-
-  useEffect(() => {
-    if (!syncEnabled || applyingRemoteSyncRef.current) return;
-    syncClientRef.current?.publish('roles', customRoles);
-  }, [customRoles, syncEnabled]);
-
-  useEffect(() => {
-    if (!syncEnabled || applyingRemoteSyncRef.current) return;
-    syncClientRef.current?.publish('knowledge', knowledgeDocs);
-  }, [knowledgeDocs, syncEnabled]);
-
-  // Save current conversation updates into history
-  useEffect(() => {
-    if (messages.length === 0) return;
-    setSavedChats((prev) => {
-      const existing = prev.find((c) => c.id === conversationId);
-      const entry: SavedChat = {
-        id: conversationId,
-        title: existing?.title || shortTitle(messages, t.newConversation),
-        messages,
-        updatedAt: Date.now(),
-        createdAt: existing?.createdAt ?? Date.now(),
-        isPinned: existing?.isPinned ?? false,
-        roleId: activeRole.id,
-        modelId: activeModel.id,
-      };
-      return [entry, ...prev.filter((c) => c.id !== conversationId)].slice(0, 40);
-    });
-  }, [conversationId, messages, t.newConversation, activeRole.id, activeModel.id]);
-
-  // Scroll to bottom on new messages
-  useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages]);
-
-  // Close chat action menu on outside click
-  useEffect(() => {
-    if (!chatMenuOpen) return;
-    const onOutside = (e: MouseEvent) => {
-      if (chatMenuRef.current && !chatMenuRef.current.contains(e.target as Node)) {
-        setChatMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onOutside);
-    return () => document.removeEventListener('mousedown', onOutside);
-  }, [chatMenuOpen]);
-
-  const startNewChat = useCallback(() => {
-    abortRef.current?.abort();
-    setConversationId(newId('conv'));
-    setMessages([]);
-    setDraft('');
-    setNotice('');
-    setChatSearchOpen(false);
-    setChatSearchQuery('');
-    setActiveTab('chat');
   }, []);
 
-  // Global desktop shortcuts (⌘K, ⌘N, ⌘,)
+  const { activeTab, setActiveTab } = useTabRouter('chat');
+
+  const {
+    authUser,
+    impersonatedCustomer,
+    trustedBrowserUntil,
+    isTwoFactorModalOpen,
+    isAdminAuthModalOpen,
+    setIsTwoFactorModalOpen,
+    setIsAdminAuthModalOpen,
+    setDeveloperEligibility,
+    logout,
+    revokeTrustedBrowser,
+    impersonateCustomer,
+    exitImpersonation,
+  } = useAuthStore();
+
+  const currentRole = useAppPreferencesStore((s) => s.role);
+  const setRole = useAppPreferencesStore((s) => s.setRole);
+
+  const {
+    sessions,
+    activeSessionId,
+    activeModel,
+    activeRole,
+    customInstruction,
+    isStreaming,
+    streamingContent,
+    inferenceError,
+    generatingTitleIds,
+    isPromptModalOpen,
+    isRoleModalOpen,
+    selectSession,
+    deleteSession,
+    renameSession,
+    togglePinSession,
+    createNewSession,
+    branchSession,
+    clearCurrentThread,
+    exportThread,
+    selectModel,
+    selectRole,
+    setCustomInstruction,
+    setIsPromptModalOpen,
+    setIsRoleModalOpen,
+    sendMessage,
+    appendVoiceTurn,
+    stopStreaming,
+  } = useChatStore();
+
+  const [pendingClarification, setPendingClarification] = useState<PendingClarification | null>(
+    null
+  );
+
+  const {
+    mcpServices,
+    isProbingCluster,
+    swarmWorkers,
+    queueJobs,
+    schemaTables,
+    gatewayRoutes,
+    securityEvents,
+    blockedIps,
+    auditRecords,
+    customers,
+    fetchMcpServices,
+    fetchAdminSync,
+    rebootService,
+    rebootAllServices,
+    probeCluster,
+    getMcpAlertCount,
+    toggleSwarmWorker,
+    scaleWorker,
+    retryQueueJob,
+    retryAllDlq,
+    clearCompletedJobs,
+    runParitySync,
+    toggleFailover,
+    updateGatewayPrice,
+    addBlockedIp,
+    removeBlockedIp,
+    addCustomer,
+    updateCustomer,
+    deleteCustomer,
+  } = useAdminStore();
+
+  const {
+    apiKeys,
+    webhooks,
+    knowledgeDocs,
+    teamMembers,
+    maxSeats: teamMaxSeats,
+    invoices,
+    userProjects,
+    userPlugins,
+    userSettings,
+    fetchApiKeys,
+    fetchWebhooks,
+    fetchKnowledgeDocs,
+    fetchTeamMembers,
+    fetchInvoices,
+    fetchProjects,
+    addApiKey,
+    updateApiKey,
+    revokeApiKey,
+    deleteApiKey,
+    probeApiKey,
+    addWebhook,
+    deleteWebhook,
+    testWebhook,
+    addKnowledgeDoc,
+    toggleKnowledgeGrounding,
+    deleteKnowledgeDoc,
+    inviteTeamMember,
+    updateTeamRole,
+    removeTeamMember,
+    topUpTokens,
+    addProject,
+    forkProject,
+    refreshProjectBuildStatus,
+    deleteProject,
+    togglePlugin,
+    addCustomPlugin,
+    updateSettings,
+    recordTokenUsage,
+  } = useCustomerStore();
+
+  const {
+    config: platformConfig,
+    dismissedBannerMessage,
+    fetchConfig,
+    dismissBanner,
+  } = usePlatformStore();
+
+  const healthAlertCount = useControlCenterStore((s) => s.healthSnapshot?.alerts?.length ?? 0);
+
+  const { lang: appLanguage, t } = useI18n();
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 900 : true
+  );
+  const [isLiveVoiceOpen, setIsLiveVoiceOpen] = useState<boolean>(false);
+  const liveVoiceSystemInstruction =
+    customInstruction.trim() ||
+    userSettings.customInstructions?.trim() ||
+    activeRole.systemInstruction;
+  const liveVoice = useLiveVoiceSession({
+    systemInstruction: liveVoiceSystemInstruction,
+    language: appLanguage,
+    onTurnCommitted: appendVoiceTurn,
+  });
+
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const modifier = event.metaKey || event.ctrlKey;
-      if (!modifier) return;
-      if (event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        setCommandOpen((v) => !v);
-      } else if (event.key.toLowerCase() === 'n') {
-        event.preventDefault();
-        startNewChat();
-      } else if (event.key === ',') {
-        event.preventDefault();
-        setActiveTab('settings');
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [startNewChat]);
-
-  const openChat = (chat: SavedChat) => {
-    setConversationId(chat.id);
-    setMessages(chat.messages);
-    setNotice('');
-    setChatSearchOpen(false);
-    setChatSearchQuery('');
-    setActiveTab('chat');
-  };
-
-  const renameChat = (id: string, title: string) => {
-    setSavedChats((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, title, updatedAt: Date.now() } : c))
-    );
-  };
-
-  const togglePinChat = (id: string) => {
-    setSavedChats((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, isPinned: !c.isPinned } : c))
-    );
-  };
-
-  const deleteChat = (id: string) => {
-    setSavedChats((prev) => prev.filter((c) => c.id !== id));
-    if (id === conversationId) {
-      startNewChat();
+    if (isLiveVoiceOpen) {
+      liveVoice.connect();
+    } else {
+      liveVoice.disconnect();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLiveVoiceOpen, appLanguage]);
+  const [authModal, setAuthModal] = useState<{ open: boolean; reason?: string }>({ open: false });
+  const [isSurveyForceOpen, setIsSurveyForceOpen] = useState<boolean>(false);
+  const [showChatMenu, setShowChatMenu] = useState(false);
+  const [showExportSubmenu, setShowExportSubmenu] = useState(false);
+  const [isChatSearchOpen, setIsChatSearchOpen] = useState(false);
+
+  useEffect(() => {
+    setIsChatSearchOpen(false);
+    setShowChatMenu(false);
+    setShowExportSubmenu(false);
+  }, [activeSessionId]);
+  const [dangerConfirm, setDangerConfirm] = useState<{
+    action: string;
+    title: string;
+    description: string;
+  } | null>(null);
+  const [isDangerRunning, setIsDangerRunning] = useState(false);
+
+  const {
+    isDockOpen,
+    isSharedArtifactView,
+    previewCode,
+    projectFiles,
+    openSharedArtifact,
+    toggleDock,
+    setDockOpen,
+    setActiveDockTab,
+  } = useWorkspaceStore();
+  const hasGeneratedWorkspace = previewCode.trim().length > 0 || projectFiles.length > 0;
+  const isGuest = !authUser;
+  const isAuthorizedAdmin = Boolean(
+    authUser && (authUser.isAdminEligible || isAuthorizedAdminEmail(authUser.email))
+  );
+  const effectiveRole = isAuthorizedAdmin && currentRole === 'admin' ? 'admin' : 'user';
+  const isProjectAdmin = isAuthorizedAdmin && effectiveRole === 'admin';
+  const isDeveloperEligible =
+    !isGuest && Boolean(authUser?.isDeveloperEligible || effectiveRole === 'admin');
+  const developerMode = isDeveloperEligible && Boolean(userSettings.developerMode);
+  const enableKnowledgeGrounding = !isGuest;
+  const showWorkspaceTips = !isGuest && userSettings.showWorkspaceTips !== false;
+
+  const openAuthModal = (reason?: string) => {
+    setAuthModal({ open: true, reason });
   };
 
-  const branchCurrentChat = () => {
-    if (messages.length === 0) return;
-    const branchedId = newId('conv');
-    const title = `${currentChatMeta?.title || shortTitle(messages, t.newConversation)} (Branch)`;
-    const branched: SavedChat = {
-      id: branchedId,
-      title,
-      messages: messages.map((m) => ({ ...m, id: newId('msg') })),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      isPinned: false,
-      roleId: activeRole.id,
-      modelId: activeModel.id,
-    };
-    setSavedChats((prev) => [branched, ...prev]);
-    setConversationId(branchedId);
-    setMessages(branched.messages);
-    setChatMenuOpen(false);
+  const handleSignOut = () => {
+    logout();
+    setDockOpen(false);
+    setActiveTab('chat', true);
+    setAuthModal({ open: true });
   };
 
-  const exportChat = (chat: SavedChat) => {
-    const markdown = `# ${chat.title}\n\n${chat.messages
-      .map(
-        (m) => `## ${m.role === 'user' ? t.exportUser : t.exportAssistant}\n\n${m.content}`
-      )
-      .join('\n\n')}`;
-    const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${chat.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'supremeai-chat'}.md`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
+  const {
+    activeRequest: hitlActiveRequest,
+    isProcessing: isHitlProcessing,
+    approve: approveHitl,
+    reject: rejectHitl,
+    dismiss: dismissHitl,
+  } = useHitlApproval();
 
-  const openCodeInDock = (code: string, language: string) => {
-    const ext =
-      language === 'html'
-        ? 'html'
-        : language === 'css'
-          ? 'css'
-          : language === 'javascript' || language === 'js'
-            ? 'js'
-            : language === 'python' || language === 'py'
-              ? 'py'
-              : language === 'json'
-                ? 'json'
-                : 'ts';
-    const fileName = language === 'html' ? 'preview.html' : `snippet-${workspaceFiles.length + 1}.${ext}`;
-    setWorkspaceFiles((prev) => {
-      const existingHtml = language === 'html' ? prev.find((f) => f.name === 'preview.html') : undefined;
-      if (existingHtml) {
-        setActiveFileId(existingHtml.id);
-        return prev.map((f) => (f.id === existingHtml.id ? { ...f, content: code } : f));
-      }
-      const created: WorkspaceFile = {
-        id: newId('file'),
-        name: fileName,
-        language: language === 'js' ? 'javascript' : language === 'ts' ? 'typescript' : language,
-        content: code,
-      };
-      setActiveFileId(created.id);
-      return [created, ...prev];
-    });
-    setDockTab(language === 'html' ? 'preview' : 'code');
-    setDockOpen(true);
-  };
+  const resolvedScheme = useThemeStore((s) => s.resolvedScheme);
+  const darkMode = resolvedScheme === 'dark';
 
-  const createWorkspaceFile = () => {
-    const nextFile: WorkspaceFile = {
-      id: newId('file'),
-      name: `module-${workspaceFiles.length + 1}.ts`,
-      language: 'typescript',
-      content: `// New SupremeAI Studio Desktop file\nexport function greet(name: string) {\n  return \`Hello, \${name}!\`;\n}\n`,
-    };
-    setWorkspaceFiles((prev) => [...prev, nextFile]);
-    setActiveFileId(nextFile.id);
-    setDockTab('code');
-    setDockOpen(true);
-  };
-
-  const buildSystemInstruction = () => {
-    const parts = [activeRole.systemInstruction];
-    if (lang === 'bn') {
-      parts.push('Respond in clear, natural Bengali (বাংলা) unless the user asks for another language.');
+  const contentLayout = userSettings.contentLayout || 'fluid';
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.dataset.workspaceLayout = contentLayout;
+      document.documentElement.lang = appLanguage;
     }
-    if (activeKnowledgeDocs.length > 0) {
-      parts.push(
-        'Workspace Knowledge Base Context:\n' +
-          activeKnowledgeDocs
-            .map((doc) => `- ${doc.title} (${doc.category}): ${doc.content}`)
-            .join('\n')
-      );
-    }
-    return parts.join('\n\n');
-  };
+  }, [contentLayout, appLanguage]);
 
-  const sendMessage = async (
-    rawText = draft,
-    attachments?: ChatAttachment[],
-    retryId?: string
-  ) => {
-    const prompt = rawText.trim();
-    if (!prompt || busy) return;
-
-    stopSpeaking();
-    setNotice('');
-    setDraft('');
-    setBusy(true);
-    setActiveTab('chat');
-
-    // Enrich prompt with attached text snippets when present
-    const attachmentContext = (attachments ?? [])
-      .filter((a) => a.previewText)
-      .map((a) => `\n\n--- Attached file: ${a.name} ---\n${a.previewText}`)
-      .join('');
-    const effectivePrompt = attachmentContext ? `${prompt}${attachmentContext}` : prompt;
-
-    const userMsg: ChatMessage = {
-      id: newId('msg'),
-      role: 'user',
-      content: prompt,
-      timestamp: Date.now(),
-      attachments: attachments && attachments.length > 0 ? attachments : undefined,
-    };
-    const assistantId = retryId ?? newId('msg');
-    const placeholder: ChatMessage = {
-      id: assistantId,
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-      modelId: activeModel.name,
-      state: 'loading',
-    };
-
-    const prevMessages = retryId ? messages.filter((m) => m.id !== retryId) : messages;
-    const historyBase =
-      retryId && prevMessages.at(-1)?.role === 'user' && prevMessages.at(-1)?.content === prompt
-        ? prevMessages.slice(0, -1)
-        : prevMessages;
-
-    setMessages([...prevMessages, ...(retryId ? [] : [userMsg]), placeholder]);
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
+  // Hydrate shared live preview artifact from ?artifact=<token> URL param (works 100% serverless)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const artifactToken = params.get('artifact');
+    if (!artifactToken) return;
+    const decoded = decodeArtifactSharePayload(artifactToken);
+    if (!decoded) return;
+    openSharedArtifact(decoded.code, decoded.lang, decoded.title);
+    toast.success(t.wsPublishShareTitle, t.wsSharedArtifactLoaded);
     try {
-      const result = await sendDesktopChat({
-        prompt: effectivePrompt,
-        model: activeModel.gatewayModel,
-        conversationId,
-        history: historyBase.slice(-10).map(({ role, content }) => ({ role, content })),
-        systemInstruction: buildSystemInstruction(),
-        signal: controller.signal,
-        onChunk: (token) => {
-          setMessages((curr) =>
-            curr.map((m) =>
-              m.id === assistantId ? { ...m, content: m.content + token, state: 'loading' } : m
-            )
-          );
-        },
-      });
+      params.delete('artifact');
+      const remaining = params.toString();
+      const nextUrl = `${window.location.pathname}${remaining ? `?${remaining}` : ''}${window.location.hash}`;
+      window.history.replaceState({}, '', nextUrl);
+    } catch {
+      // Ignore history errors in restricted sandboxes
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-      if (result.conversationId && result.conversationId !== conversationId) {
-        setConversationId(result.conversationId);
-      }
-      setGatewayStatus('connected');
-      setMessages((curr) =>
-        curr.map((m) =>
-          m.id === assistantId
-            ? { ...m, content: result.text || m.content, state: undefined, retryPrompt: undefined }
-            : m
-        )
-      );
+  // Sync saved custom instructions into chat store on mount
+  useEffect(() => {
+    if (userSettings.customInstructions && !customInstruction) {
+      setCustomInstruction(userSettings.customInstructions);
+    }
+  }, [userSettings.customInstructions, customInstruction, setCustomInstruction]);
 
-      // Auto-load HTML code blocks into Live Preview dock if generated
-      const htmlMatch = /```html\s*([\s\S]*?)```/i.exec(result.text || '');
-      if (htmlMatch?.[1] && htmlMatch[1].trim().length > 40) {
-        openCodeInDock(htmlMatch[1].trim(), 'html');
-      }
+  // Fetch global platform governance config and MCP telemetry
+  useEffect(() => {
+    fetchConfig();
+    fetchMcpServices();
+  }, [fetchConfig, fetchMcpServices]);
 
-      if (voiceConfig.autoSpeak && result.text) {
-        void speak(result.text, lang);
+  // Hydrate authenticated customer workspace data from backend services
+  useEffect(() => {
+    if (!authUser) return;
+    fetchApiKeys();
+    fetchWebhooks();
+    fetchKnowledgeDocs();
+    fetchTeamMembers();
+    fetchInvoices();
+    fetchProjects();
+  }, [
+    authUser,
+    fetchApiKeys,
+    fetchWebhooks,
+    fetchKnowledgeDocs,
+    fetchTeamMembers,
+    fetchInvoices,
+    fetchProjects,
+  ]);
+
+  // Sync central admin records whenever an admin workspace tab is active and authenticated
+  useEffect(() => {
+    if (currentRole === 'admin' && ADMIN_ONLY_TABS.has(activeTab)) {
+      const hasAdminToken =
+        typeof sessionStorage !== 'undefined' &&
+        Boolean(sessionStorage.getItem('supremeai_admin_token'));
+      if (hasAdminToken) {
+        fetchAdminSync();
       }
-    } catch (error) {
-      if ((error as { name?: string })?.name === 'AbortError') {
-        setMessages((curr) =>
-          curr.map((m) => (m.id === assistantId ? { ...m, state: undefined } : m))
-        );
-      } else {
-        setGatewayStatus('offline');
-        const detail =
-          typeof error === 'string'
-            ? error
-            : error instanceof Error
-              ? error.message
-              : t.unknownConnectionError;
-        setMessages((curr) =>
-          curr.map((m) =>
-            m.id === assistantId
-              ? {
-                  ...m,
-                  content: `${t.assistantFailed} (${detail})`,
-                  state: 'error',
-                  retryPrompt: prompt,
-                }
-              : m
-          )
-        );
-        setNotice(detail.slice(0, 220));
+    }
+  }, [currentRole, activeTab, fetchAdminSync]);
+
+  // Smooth tab routing guard: keep default landing page as 'chat' for all roles;
+  // only downgrade away from admin-only tabs when leaving admin role.
+  const prevRoleRef = useRef(effectiveRole);
+  useEffect(() => {
+    if (prevRoleRef.current !== effectiveRole) {
+      if (effectiveRole !== 'admin' && ADMIN_ONLY_TABS.has(activeTab)) {
+        setActiveTab('chat');
+      } else if (
+        effectiveRole === 'admin' &&
+        prevRoleRef.current === 'user' &&
+        (activeTab === 'chat' || activeTab === 'user-settings')
+      ) {
+        setActiveTab('admin-overview');
       }
-    } finally {
-      abortRef.current = null;
-      setBusy(false);
+      prevRoleRef.current = effectiveRole;
+    }
+  }, [effectiveRole, activeTab, setActiveTab]);
+
+  // Security Gate: Only server-verified RBAC admins or configured project admin emails can access admin tabs or role
+  useEffect(() => {
+    const isAllowedAdmin = Boolean(
+      authUser && (authUser.isAdminEligible || isAuthorizedAdminEmail(authUser.email))
+    );
+    if (!isAllowedAdmin) {
+      if (effectiveRole === 'admin' || currentRole === 'admin') {
+        setRole('user');
+      }
+      if (ADMIN_ONLY_TABS.has(activeTab)) {
+        setActiveTab('chat');
+      }
+    }
+  }, [authUser, effectiveRole, currentRole, activeTab, setActiveTab, setRole]);
+
+  // Route & dock safety guard for Guest, Standard, and Developer workspaces
+  useEffect(() => {
+    if (isGuest) {
+      if (isDockOpen && !isSharedArtifactView && !hasGeneratedWorkspace) setDockOpen(false);
+      if (activeTab !== 'chat') {
+        const label = SUBVIEW_TITLES[activeTab] || 'Workspace Features';
+        setActiveTab('chat', true);
+        setAuthModal({ open: true, reason: label });
+      }
+      return;
+    }
+    if (effectiveRole !== 'admin') {
+      if (!developerMode && DEV_ONLY_TABS.has(activeTab)) {
+        setActiveTab('chat');
+      }
+    }
+  }, [
+    isGuest,
+    isSharedArtifactView,
+    hasGeneratedWorkspace,
+    effectiveRole,
+    developerMode,
+    enableKnowledgeGrounding,
+    isDockOpen,
+    setDockOpen,
+    activeTab,
+    setActiveTab,
+  ]);
+
+  useEffect(() => {
+    const handleOpenScheduleTab = () => {
+      if (isGuest) {
+        openAuthModal(t.wsScheduleTabTitle);
+        return;
+      }
+      setActiveTab('chat');
+      setActiveDockTab('schedule');
+      setDockOpen(true);
+    };
+    window.addEventListener('supremeai-open-schedule-tab', handleOpenScheduleTab);
+    return () => {
+      window.removeEventListener('supremeai-open-schedule-tab', handleOpenScheduleTab);
+    };
+  }, [isGuest, setActiveTab, setActiveDockTab, setDockOpen, t.wsScheduleTabTitle]);
+
+  const lastCronMinuteByTaskRef = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    if (isGuest) return;
+    const tickSchedules = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      const now = new Date();
+      const minuteKey = getCronMinuteKey(now);
+      const tasks = loadScheduledTasks();
+      for (const task of tasks) {
+        if (!task.enabled || !task.cronExpression) continue;
+        if (lastCronMinuteByTaskRef.current.get(task.id) === minuteKey) continue;
+        if (matchesCronAtDate(task.cronExpression, now)) {
+          lastCronMinuteByTaskRef.current.set(task.id, minuteKey);
+          void executeScheduledTaskOnce(task).then((res) => {
+            window.dispatchEvent(new CustomEvent('supremeai-schedules-updated'));
+            toast.info(t.wsScheduleRunHistoryToast, `${task.title}: ${res.summary}`);
+          });
+        }
+      }
+    };
+    const timer = window.setInterval(tickSchedules, 30000);
+    return () => window.clearInterval(timer);
+  }, [isGuest, t.wsScheduleRunHistoryToast]);
+
+  const handleSelectTab = (tab: string) => {
+    if (isGuest && tab !== 'chat' && tab !== 'live-sync') {
+      openAuthModal(SUBVIEW_TITLES[tab] || 'Settings & Workspace Features');
+      if (typeof window !== 'undefined' && window.innerWidth < 768) {
+        setSidebarOpen(false);
+      }
+      return;
+    }
+    setActiveTab(tab);
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setSidebarOpen(false);
     }
   };
 
-  const stopGenerating = () => {
-    abortRef.current?.abort();
-    setBusy(false);
-  };
-
-  const toggleAutoSpeak = () => {
-    const next = !voiceConfig.autoSpeak;
-    updateVoiceConfig({ autoSpeak: next });
-    if (!next) stopSpeaking();
-    else void speak(t.testVoicePhrase, lang);
-  };
-
-  const handleChatWithProject = (project: DesktopProject) => {
-    startNewChat();
-    void sendMessage(
-      `Inspect my connected repository "${project.name}" (${project.repoUrl}, branch: ${project.branch}). Summary: ${project.description}. Provide an architecture overview and recommended next engineering milestones.`
+  const handleToggleDeveloperMode = () => {
+    if (!isDeveloperEligible) return;
+    const next = !developerMode;
+    updateSettings({ developerMode: next });
+    if (!next) {
+      if (DEV_ONLY_TABS.has(activeTab)) {
+        setActiveTab('chat');
+      }
+    }
+    toast.info(
+      next ? 'Developer Mode Enabled' : 'Standard Workspace Active',
+      next
+        ? 'API keys, repositories, knowledge base, and Developer Tools are now unlocked.'
+        : 'Clean Standard Mode active for everyday work.'
     );
   };
 
-  const handleReviewProject = (project: DesktopProject) => {
-    startNewChat();
-    void sendMessage(
-      `Perform a structured code and security review checklist for "${project.name}" (${project.repoUrl}). Highlight TypeScript strictness, IPC/API boundary safety, and performance priorities.`
+  useMcpTelemetry(currentRole === 'admin');
+
+  const currentSession = sessions.find((s) => s.id === activeSessionId) || sessions[0];
+
+  const prevSessionMsgRef = useRef<{ sessionId: string; count: number }>({
+    sessionId: currentSession?.id || '',
+    count: currentSession?.messages?.length || 0,
+  });
+  const wasStreamingRef = useRef<boolean>(isStreaming);
+
+  useEffect(() => {
+    const sid = currentSession?.id || '';
+    const count = currentSession?.messages?.length || 0;
+    const prev = prevSessionMsgRef.current;
+
+    const messageAddedInSameSession = sid === prev.sessionId && count > prev.count;
+    const streamingJustStarted = !wasStreamingRef.current && isStreaming;
+
+    if (messageAddedInSameSession || streamingJustStarted) {
+      setSidebarOpen(false);
+    }
+
+    prevSessionMsgRef.current = { sessionId: sid, count };
+    wasStreamingRef.current = isStreaming;
+  }, [currentSession?.id, currentSession?.messages?.length, isStreaming]);
+
+  const wasDockOpenRef = useRef<boolean>(isDockOpen);
+  useEffect(() => {
+    if (!wasDockOpenRef.current && isDockOpen && window.innerWidth < 1200) {
+      setSidebarOpen(false);
+    }
+    wasDockOpenRef.current = isDockOpen;
+  }, [isDockOpen]);
+
+  const handleChatWithProject = (project: UserProject) => {
+    createNewSession();
+    setActiveTab('chat');
+    setSidebarOpen(false);
+    sendMessage(
+      `Please inspect my connected GitHub repository: "${project.name}" (${project.repoUrl}, branch: ${project.branch}). Description: ${project.description}. Give me a quick architecture summary and recommended next steps.`,
+      undefined,
+      knowledgeDocs
     );
   };
 
-  const breadcrumbLabel =
-    activeTab === 'chat'
-      ? messages.length
-        ? currentChatMeta?.title || shortTitle(messages, t.newConversation)
-        : t.newConversation
-      : activeTab === 'chat-history'
-        ? t.allConversations
-        : activeTab === 'roles'
-          ? t.rolesAndPersonas
-          : activeTab === 'projects'
-            ? t.projects
-            : activeTab === 'knowledge'
-              ? t.knowledgeBase
-              : activeTab === 'plugins'
-                ? t.pluginsTools
-                : t.settings;
+  const handleTriggerCodeReview = (project: UserProject) => {
+    createNewSession();
+    setActiveTab('chat');
+    setSidebarOpen(false);
+    sendMessage(
+      `Perform a comprehensive AI Code Review for the repository "${project.name}" (${project.repoUrl}). Check for security vulnerabilities, TypeScript strictness, and clean architecture.`,
+      undefined,
+      knowledgeDocs
+    );
+  };
 
-  const latestAssistantReply = messages
-    .filter((m) => m.role === 'assistant' && m.state !== 'error')
-    .slice(-1)[0]?.content;
+  const executeDashboardAction = (
+    action: DashboardActionType,
+    lang: 'en' | 'bn' | 'banglish'
+  ): boolean => {
+    const bn = lang === 'bn';
+    switch (action) {
+      case 'toggle_dark_mode':
+        useThemeStore.getState().setThemeMode('dark');
+        toast.success(bn ? 'ডার্ক মোড চালু' : 'Dark Mode Active', bn ? 'থিম ডার্ক মোডে পরিবর্তন করা হয়েছে।' : 'Switched workspace theme to dark mode.');
+        return true;
+      case 'toggle_light_mode':
+        useThemeStore.getState().setThemeMode('light');
+        toast.success(bn ? 'লাইট মোড চালু' : 'Light Mode Active', bn ? 'থিম লাইট মোডে পরিবর্তন করা হয়েছে।' : 'Switched workspace theme to light mode.');
+        return true;
+      case 'toggle_voice':
+        setIsLiveVoiceOpen((v) => !v);
+        toast.info(bn ? 'ভয়েস মোড' : 'Voice Mode', bn ? 'লাইভ ভয়েস ইন্টারফেস পরিবর্তন করা হয়েছে।' : 'Toggled live voice companion mode.');
+        return true;
+      case 'open_usage':
+        handleSelectTab('user-billing');
+        return true;
+      case 'open_settings':
+        handleSelectTab('user-settings');
+        return true;
+      case 'open_knowledge':
+        handleSelectTab('user-knowledge');
+        return true;
+      case 'open_history':
+        handleSelectTab('chat-history');
+        return true;
+      case 'open_admin_health':
+        if (effectiveRole === 'admin') {
+          handleSelectTab('health-monitor');
+          return true;
+        }
+        return false;
+      case 'open_admin_ai':
+        if (effectiveRole === 'admin') {
+          handleSelectTab('llm-gateway');
+          return true;
+        }
+        return false;
+      case 'open_admin_security':
+        if (effectiveRole === 'admin') {
+          handleSelectTab('security');
+          return true;
+        }
+        return false;
+      case 'open_admin_releases':
+        if (effectiveRole === 'admin') {
+          handleSelectTab('github-pipeline');
+          return true;
+        }
+        return false;
+      default:
+        return false;
+    }
+  };
 
-  const streamingAssistantText = busy
-    ? messages.find((m) => m.role === 'assistant' && m.state === 'loading')?.content ?? ''
-    : '';
+  const handleSendMessageWrapper = async (
+    text: string,
+    attachment?: ChatAttachment,
+    attachments?: ChatAttachment[],
+    skipClarification = false
+  ) => {
+    setSidebarOpen(false);
+    setPendingClarification(null);
+    const trimmed = text.trim();
+    const attCount = attachments?.length || (attachment ? 1 : 0);
+    const estimatedTokens = Math.ceil(trimmed.length / 4) + attCount * 258;
+    recordTokenUsage(estimatedTokens);
+
+    // Run unified Semantic Intent Orchestrator (Bangla / Banglish / English + Actions + Clarification)
+    const intent = trimmed
+      ? await orchestrateUserIntent({
+          promptText: trimmed,
+          attachment: attachments?.[0] || attachment,
+          knowledgeDocs,
+          recentMessages: currentSession?.messages || [],
+          isAdmin: effectiveRole === 'admin',
+          skipClarification: skipClarification || isLiveVoiceOpen,
+        })
+      : undefined;
+
+    if (intent && intent.dashboardAction !== 'none') {
+      const handled = executeDashboardAction(intent.dashboardAction, intent.inferredLanguage);
+      if (handled) return;
+    }
+
+    if (
+      intent?.needsClarification &&
+      intent.clarificationQuestion &&
+      intent.clarificationOptions &&
+      intent.clarificationOptions.length >= 2
+    ) {
+      setPendingClarification({
+        id: `clarify_${Date.now()}`,
+        originalPrompt: trimmed,
+        question: intent.clarificationQuestion,
+        options: intent.clarificationOptions,
+        language: intent.inferredLanguage,
+        attachment,
+        attachments,
+      });
+      return;
+    }
+
+    // When Voice Mode is active, both voice and text inputs trigger spoken voice responses
+    if (isLiveVoiceOpen && attCount === 0 && trimmed) {
+      appendVoiceTurn(trimmed, '');
+      const routed = liveVoice.sendTextPrompt(trimmed, { recordUserTranscript: false });
+      if (routed) {
+        return;
+      }
+      // Fallback: generate via standard chat model and speak the response aloud via TTS
+      await sendMessage(trimmed, undefined, knowledgeDocs, undefined, undefined, intent);
+      const updatedSession = useChatStore.getState().sessions.find((s) => s.id === activeSessionId);
+      const lastMsg = updatedSession?.messages?.[updatedSession.messages.length - 1];
+      if (lastMsg?.role === 'assistant' && lastMsg.content) {
+        liveVoice.speakFallbackText(lastMsg.content);
+      }
+      return;
+    }
+
+    await sendMessage(text, attachment, knowledgeDocs, undefined, attachments, intent);
+    if (isLiveVoiceOpen) {
+      const updatedSession = useChatStore.getState().sessions.find((s) => s.id === activeSessionId);
+      const lastMsg = updatedSession?.messages?.[updatedSession.messages.length - 1];
+      if (lastMsg?.role === 'assistant' && lastMsg.content) {
+        liveVoice.speakFallbackText(lastMsg.content);
+      }
+    }
+  };
+
+  const handleSelectClarificationOption = (option: string) => {
+    if (!pendingClarification) return;
+    const refinedPrompt = `${pendingClarification.originalPrompt} — ${option}`;
+    const { attachment, attachments } = pendingClarification;
+    setPendingClarification(null);
+    void handleSendMessageWrapper(refinedPrompt, attachment, attachments, true);
+  };
+
+  const handleSkipClarification = () => {
+    if (!pendingClarification) return;
+    const { originalPrompt, attachment, attachments } = pendingClarification;
+    setPendingClarification(null);
+    void handleSendMessageWrapper(originalPrompt, attachment, attachments, true);
+  };
+
+  const handleExecuteDangerAction = async () => {
+    if (!dangerConfirm) return;
+    setIsDangerRunning(true);
+    try {
+      if (dangerConfirm.action === 'reboot-all') {
+        await rebootAllServices();
+      } else if (dangerConfirm.action === 'flush-dlq') {
+        retryAllDlq();
+      }
+      setDangerConfirm(null);
+    } finally {
+      setIsDangerRunning(false);
+    }
+  };
+
+  const mcpAlertCount = getMcpAlertCount();
+  const activePluginsCount = userPlugins.filter((p) => p.isEnabled).length;
+  const isChatEmpty = (currentSession?.messages?.length || 0) === 0 && !isStreaming;
+  const totalUserMessages = sessions.reduce(
+    (sum, s) => sum + (s.messages?.filter((m) => m.role === 'user').length || 0),
+    0
+  );
+  const showAnnouncement =
+    platformConfig.announcementBanner.active &&
+    platformConfig.announcementBanner.message.trim().length > 0 &&
+    dismissedBannerMessage !== platformConfig.announcementBanner.message;
+  const isMaintenanceBlocked = platformConfig.maintenanceMode && effectiveRole !== 'admin';
+
+  const bannerToneClasses =
+    platformConfig.announcementBanner.level === 'critical'
+      ? 'bg-rose-600 text-white border-rose-700'
+      : platformConfig.announcementBanner.level === 'warning'
+        ? 'bg-amber-500 text-slate-950 border-amber-600'
+        : 'bg-blue-600 text-white border-blue-700';
 
   return (
-    <div className="relative h-full w-full flex overflow-hidden text-slate-900 dark:text-slate-100">
-      {/* SupremeAI Frontend Live Screen Animated Scenic & Particle Backdrop */}
-      <LiveScreenBackdrop
-        isEmpty={activeTab === 'chat' && messages.length === 0}
-        isChatView={activeTab === 'chat'}
-      />
+    <ErrorBoundary>
+      <div
+        className={`theme-crossfade flex flex-col h-full w-full text-slate-900 dark:text-slate-100 font-sans antialiased overflow-hidden relative ${
+          currentRole === 'admin' ? 'cyber-scanline' : ''
+        }`}
+      >
+        {/* Dynamic Live Screen Backdrop */}
+        <LiveScreenBackdrop isEmpty={isChatEmpty} isChatView={activeTab === 'chat'} />
 
-      <div className="relative z-10 h-full flex shrink-0">
-        <Sidebar
-          isOpen={sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
-          activeTab={activeTab}
-          onSelectTab={setActiveTab}
-          sessions={savedChats}
-          activeSessionId={conversationId}
-          onSelectSession={openChat}
-          onNewChat={startNewChat}
-          onRenameSession={renameChat}
-          onDeleteSession={deleteChat}
-          onTogglePin={togglePinChat}
-          onExportSession={exportChat}
-          activeRole={activeRole}
-          projectsCount={projects.length}
-          activeKnowledgeCount={activeKnowledgeDocs.length}
-          activePluginsCount={activePluginsCount}
-          onOpenAdmin={() => setAdminOpen(true)}
-          onOpenFeedback={() => setFeedbackOpen(true)}
-          onSessionEmailChange={setSessionEmail}
-        />
-      </div>
-
-      {/* Main Studio Shell + Resizable Workspace Dock */}
-      <div className="flex-1 min-w-0 h-full flex relative z-10 overflow-hidden">
-        <main className="flex-1 min-w-0 h-full flex flex-col relative overflow-hidden">
-          {/* Top Header Bar */}
-          <header className="h-14 shrink-0 px-4 sm:px-5 flex items-center justify-between gap-4 border-b border-slate-200/75 dark:border-slate-800/80 bg-white/45 dark:bg-slate-950/35 backdrop-blur-md z-10">
-            <div className="flex items-center gap-2.5 min-w-0">
-              {!sidebarOpen && (
-                <button
-                  type="button"
-                  onClick={() => setSidebarOpen(true)}
-                  aria-label={t.openSidebar}
-                  title={t.openSidebar}
-                  className="p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
-                >
-                  <PanelLeft className="w-4 h-4" />
-                </button>
-              )}
-              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 min-w-0">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('chat')}
-                  className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  {t.workspace}
-                </button>
-                <span aria-hidden="true">/</span>
-                <strong className="font-semibold text-slate-900 dark:text-slate-100 truncate max-w-[34vw]">
-                  {breadcrumbLabel}
-                </strong>
-              </div>
+        {/* Admin Impersonation Bar */}
+        {impersonatedCustomer && (
+          <div className="relative z-30 px-4 py-1.5 bg-purple-600 text-white text-xs flex items-center justify-between gap-3 shrink-0">
+            <div className="flex items-center gap-2 min-w-0 truncate">
+              <UserCheck className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">
+                Viewing workspace as <strong>{impersonatedCustomer.name}</strong> (
+                {impersonatedCustomer.tier} · {impersonatedCustomer.email})
+              </span>
             </div>
+            <button
+              type="button"
+              onClick={() => {
+                exitImpersonation();
+                setActiveTab('admin-overview');
+              }}
+              className="px-2.5 py-0.5 rounded-md bg-white/20 hover:bg-white/30 text-white font-semibold cursor-pointer shrink-0 whitespace-nowrap"
+            >
+              Exit Impersonation
+            </button>
+          </div>
+        )}
 
-            <div className="flex items-center gap-2 shrink-0">
-              {/* Command Palette trigger */}
-              <button
-                type="button"
-                onClick={() => setCommandOpen(true)}
-                className="hidden lg:inline-flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs text-slate-500 dark:text-slate-400 border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer whitespace-nowrap"
-              >
-                <Search className="w-3.5 h-3.5" />
-                <span>{t.commandPalette}</span>
-                <kbd className="font-mono text-[10px]">⌘K</kbd>
-              </button>
+        {/* Global System Announcement Banner */}
+        {showAnnouncement && (
+          <div
+            className={`relative z-30 px-4 py-1.5 text-xs border-b flex items-center justify-between gap-3 shrink-0 ${bannerToneClasses}`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Megaphone className="w-3.5 h-3.5 shrink-0" />
+              <span className="font-medium truncate">
+                {platformConfig.announcementBanner.message}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => dismissBanner(platformConfig.announcementBanner.message)}
+              aria-label="Dismiss announcement"
+              className="p-0.5 rounded hover:bg-black/15 cursor-pointer shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
-              {/* 3D Companion toggle */}
-              <button
-                type="button"
-                onClick={() => setHologramOpen((v) => !v)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                  hologramOpen
-                    ? 'theme-accent-active'
-                    : 'border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 text-slate-700 dark:text-slate-200 hover:border-slate-300 dark:hover:border-slate-700'
-                }`}
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>{t.hologramBtn}</span>
-              </button>
-
-              {/* Workspace Dock toggle */}
-              <button
-                type="button"
-                onClick={() => setDockOpen((v) => !v)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                  dockOpen
-                    ? 'theme-accent-active'
-                    : 'border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 text-slate-700 dark:text-slate-200 hover:border-slate-300 dark:hover:border-slate-700'
-                }`}
-              >
-                <PanelRight className="w-3.5 h-3.5" />
-                <span>{dockOpen ? t.closeDock : t.workspaceDock}</span>
-              </button>
-
-              {/* Voice auto-speak / stop */}
-              <button
-                type="button"
-                onClick={() => (speaking ? stopSpeaking() : toggleAutoSpeak())}
-                title={speaking ? t.stopSpeaking : t.voiceToggleTooltip}
-                aria-label={speaking ? t.stopSpeaking : t.voiceToggleTooltip}
-                className={`p-2 rounded-xl border transition-colors cursor-pointer ${
-                  speaking || voiceConfig.autoSpeak
-                    ? 'theme-accent-active'
-                    : 'border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                {speaking ? <Square className="w-3.5 h-3.5" /> : <Volume2 className="w-4 h-4" />}
-              </button>
-
-              {/* 3-dot Chat Menu */}
-              {activeTab === 'chat' && messages.length > 0 && (
-                <div ref={chatMenuRef} className="relative">
+        {/* Main Viewport Container */}
+        <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden relative z-10">
+          {/* Maintenance Lock Overlay for non-admin workspaces */}
+          {isMaintenanceBlocked && (
+            <div className="absolute inset-0 z-40 bg-slate-950/80 backdrop-blur-xl flex items-center justify-center p-6">
+              <div className="max-w-md w-full rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 text-center space-y-4 shadow-2xl">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-500 flex items-center justify-center mx-auto">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <div className="space-y-1.5">
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                    Scheduled Maintenance Active
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                    {platformConfig.maintenanceMessage}
+                  </p>
+                </div>
+                <div className="flex items-center justify-center gap-2 pt-2">
+                  {(Boolean(authUser && isAuthorizedAdminEmail(authUser.email)) ||
+                    impersonatedCustomer) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (impersonatedCustomer) {
+                          exitImpersonation();
+                          setActiveTab('admin-overview');
+                        } else {
+                          setRole('admin');
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl theme-btn-primary text-xs font-semibold cursor-pointer"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      <span>Return to Admin Console</span>
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => setChatMenuOpen((v) => !v)}
-                    aria-label={t.chatActionsMenu}
-                    className="p-2 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
+                    onClick={() => (isGuest ? openAuthModal('Account Access') : handleSignOut())}
+                    className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
                   >
-                    <MoreVertical className="w-4 h-4" />
+                    {isGuest ? 'Sign In' : 'Sign Out'}
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
 
-                  {chatMenuOpen && (
-                    <div className="absolute right-0 top-full mt-1.5 w-52 rounded-2xl border theme-surface-strong p-1.5 z-40 text-xs space-y-0.5">
+          {/* Studio Sidebar */}
+          <Sidebar
+            sessions={sessions}
+            activeSessionId={currentSession?.id || ''}
+            onSelectSession={selectSession}
+            onDeleteSession={deleteSession}
+            onRenameSession={renameSession}
+            onTogglePinSession={togglePinSession}
+            onNewSession={createNewSession}
+            activeRole={activeRole}
+            onOpenRoleModal={() =>
+              isGuest ? openAuthModal('Role & Model Customization') : setIsRoleModalOpen(true)
+            }
+            isOpen={sidebarOpen}
+            onToggleOpen={() => setSidebarOpen(!sidebarOpen)}
+            onSelectTab={handleSelectTab}
+            activeTab={activeTab}
+            projectsCount={userProjects.length}
+            activePluginsCount={activePluginsCount}
+            authUser={authUser}
+            onSignOut={handleSignOut}
+            developerMode={developerMode}
+            enableKnowledgeGrounding={enableKnowledgeGrounding}
+            tokensUsed={userSettings.monthlyTokensUsed}
+            tokensLimit={userSettings.monthlyTokensLimit}
+            isGuest={isGuest}
+            onRequestAuth={openAuthModal}
+            generatingTitleIds={generatingTitleIds}
+          />
+
+          {/* Floating Sidebar Expand Button for Chat */}
+          {activeTab === 'chat' && !sidebarOpen && (
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+              className="absolute top-3.5 left-3.5 z-30 p-2 rounded-xl bg-white/85 dark:bg-slate-900/85 backdrop-blur-md border border-slate-200/80 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white shadow-xs transition-colors cursor-pointer"
+            >
+              <PanelLeft className="w-4 h-4" />
+            </button>
+          )}
+
+          {/* 1. Chat Workspace */}
+          {activeTab === 'chat' && (
+            <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden relative">
+              <main className="@container/chat flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden relative bg-transparent">
+                {/* Streamlined Top-Right Chat Controls */}
+                <div
+                  className={`relative z-20 px-3 sm:px-4 pt-3 flex items-center justify-end gap-1.5 flex-wrap pointer-events-none shrink-0 ${
+                    !sidebarOpen ? 'pl-14' : ''
+                  }`}
+                >
+                  <div className="pointer-events-auto flex items-center gap-1.5 flex-wrap justify-end">
+                    <SyncStatusPill onOpen={() => setActiveTab('live-sync')} compact />
+                    {isGuest && (
                       <button
                         type="button"
-                        onClick={() => {
-                          setChatSearchOpen((v) => !v);
-                          setChatMenuOpen(false);
-                        }}
-                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                        onClick={() => openAuthModal('Settings & Full Workspace')}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-semibold theme-btn-primary cursor-pointer shadow-xs"
                       >
-                        <Search className="w-3.5 h-3.5 theme-accent-text" />
-                        <span>{t.searchInChat}</span>
+                        <LogIn className="w-3.5 h-3.5" />
+                        <span>{t.signInSignUp}</span>
                       </button>
+                    )}
+
+                    {(!isGuest || isSharedArtifactView || hasGeneratedWorkspace) && (
                       <button
                         type="button"
-                        onClick={() => {
-                          togglePinChat(conversationId);
-                          setChatMenuOpen(false);
-                        }}
-                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                        data-testid="focus-dock-toggle-btn"
+                        onClick={() => toggleDock()}
+                        aria-label={isDockOpen ? 'Close workspace dock' : 'Open workspace dock'}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium backdrop-blur-md border transition-all cursor-pointer shadow-xs ${
+                          isDockOpen
+                            ? 'theme-accent-active'
+                            : 'bg-white/80 dark:bg-slate-900/80 border-slate-200/80 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                        }`}
                       >
-                        <Pin className="w-3.5 h-3.5 text-amber-500" />
-                        <span>
-                          {currentChatMeta?.isPinned ? t.unpinConversation : t.pinConversation}
-                        </span>
+                        <PanelRight className="w-3.5 h-3.5" />
+                        <span>{isDockOpen ? t.closeDock : t.workspaceDock}</span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={branchCurrentChat}
-                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
-                      >
-                        <GitFork className="w-3.5 h-3.5 text-violet-500" />
-                        <span>{t.branchConversation}</span>
-                      </button>
-                      {currentChatMeta && (
+                    )}
+
+                    {/* Consolidated 3-Dot Chat Menu (Search, Pin, Branch, Share, Export, Clear) */}
+                    {(currentSession?.messages?.length || 0) > 0 && (
+                      <div className="relative">
                         <button
                           type="button"
                           onClick={() => {
-                            exportChat(currentChatMeta);
-                            setChatMenuOpen(false);
+                            setShowChatMenu((prev) => {
+                              const next = !prev;
+                              if (!next) setShowExportSubmenu(false);
+                              return next;
+                            });
                           }}
-                          className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                          aria-label={t.chatActionsMenu}
+                          aria-expanded={showChatMenu}
+                          title={t.chatActionsMenu}
+                          className={`p-2 rounded-xl backdrop-blur-md border transition-colors cursor-pointer shadow-xs ${
+                            showChatMenu
+                              ? 'bg-slate-900 text-white border-slate-900 dark:bg-white dark:text-slate-950 dark:border-white'
+                              : 'bg-white/80 dark:bg-slate-900/80 border-slate-200/80 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                          }`}
                         >
-                          <Download className="w-3.5 h-3.5 text-sky-500" />
-                          <span>{t.exportConversation}</span>
+                          <MoreVertical className="w-4 h-4" />
                         </button>
-                      )}
-                      <div className="my-1 border-t border-slate-200/70 dark:border-slate-800" />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          startNewChat();
-                          setChatMenuOpen(false);
-                        }}
-                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>{t.clearConversation}</span>
-                      </button>
-                    </div>
-                  )}
+
+                        {showChatMenu && (
+                          <>
+                            <div
+                              className="fixed inset-0 z-30"
+                              onClick={() => {
+                                setShowChatMenu(false);
+                                setShowExportSubmenu(false);
+                              }}
+                            />
+                            <div className="absolute right-0 top-full mt-1.5 w-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/80 rounded-2xl shadow-2xl z-40 p-1.5 text-xs space-y-0.5">
+                              {(currentSession?.messages?.length || 0) > 0 && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsChatSearchOpen((prev) => !prev);
+                                      setShowChatMenu(false);
+                                      setShowExportSubmenu(false);
+                                    }}
+                                    className={`w-full text-left px-2.5 py-2 rounded-xl flex items-center justify-between transition-colors cursor-pointer ${
+                                      isChatSearchOpen
+                                        ? 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 font-medium'
+                                        : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
+                                    }`}
+                                  >
+                                    <span className="flex items-center gap-2">
+                                      <Search className="w-3.5 h-3.5 text-cyan-500" />
+                                      <span>{t.searchInChat}</span>
+                                    </span>
+                                    {isChatSearchOpen && (
+                                      <span className="text-[10px] font-mono font-semibold">
+                                        {t.activeBadge}
+                                      </span>
+                                    )}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (isGuest) {
+                                        setShowChatMenu(false);
+                                        openAuthModal('Pinned Conversations');
+                                        return;
+                                      }
+                                      if (currentSession?.id) {
+                                        togglePinSession(currentSession.id);
+                                      }
+                                      setShowChatMenu(false);
+                                    }}
+                                    className={`w-full text-left px-2.5 py-2 rounded-xl flex items-center gap-2 transition-colors cursor-pointer ${
+                                      currentSession?.isPinned
+                                        ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium'
+                                        : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
+                                    }`}
+                                  >
+                                    <Pin className="w-3.5 h-3.5 text-amber-500" />
+                                    <span>{currentSession?.isPinned ? t.pinned : t.pin}</span>
+                                  </button>
+
+                                  {developerMode && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (currentSession?.id) {
+                                          branchSession(currentSession.id);
+                                        }
+                                        setShowChatMenu(false);
+                                      }}
+                                      className="w-full text-left px-2.5 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 flex items-center gap-2 transition-colors cursor-pointer"
+                                    >
+                                      <GitFork className="w-3.5 h-3.5 text-violet-500" />
+                                      <span>{t.branch}</span>
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      setShowChatMenu(false);
+                                      if (isGuest) {
+                                        openAuthModal('Sharing Conversations');
+                                        return;
+                                      }
+                                      if (currentSession?.id) {
+                                        try {
+                                          const res = await shareService.generateShareLink(
+                                            currentSession.id
+                                          );
+                                          await navigator.clipboard.writeText(res.share_url);
+                                          toast.success('Share Link Copied', res.share_url);
+                                        } catch {
+                                          toast.error(
+                                            'Share Failed',
+                                            'Could not generate share link'
+                                          );
+                                        }
+                                      }
+                                    }}
+                                    className="w-full text-left px-2.5 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 flex items-center gap-2 transition-colors cursor-pointer"
+                                  >
+                                    <Share2 className="w-3.5 h-3.5 text-blue-500" />
+                                    <span>{t.share}</span>
+                                  </button>
+
+                                  <div>
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowExportSubmenu((prev) => !prev)}
+                                      className="w-full text-left px-2.5 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 flex items-center justify-between transition-colors cursor-pointer"
+                                    >
+                                      <span className="flex items-center gap-2">
+                                        <Download className="w-3.5 h-3.5 text-emerald-500" />
+                                        <span>{t.exportBtn}</span>
+                                      </span>
+                                      <ChevronRight
+                                        className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
+                                          showExportSubmenu ? 'rotate-90' : ''
+                                        }`}
+                                      />
+                                    </button>
+
+                                    {showExportSubmenu && (
+                                      <div className="pl-7 pr-1 py-1 space-y-0.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            exportThread('markdown');
+                                            setShowExportSubmenu(false);
+                                            setShowChatMenu(false);
+                                          }}
+                                          className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 cursor-pointer"
+                                        >
+                                          {t.exportMarkdown}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            exportThread('text');
+                                            setShowExportSubmenu(false);
+                                            setShowChatMenu(false);
+                                          }}
+                                          className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 cursor-pointer"
+                                        >
+                                          {t.exportPlainText}
+                                        </button>
+                                        {developerMode && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              exportThread('json');
+                                              setShowExportSubmenu(false);
+                                              setShowChatMenu(false);
+                                            }}
+                                            className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 cursor-pointer"
+                                          >
+                                            {t.exportJson}
+                                          </button>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="border-t border-slate-100 dark:border-slate-800 my-1" />
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsChatSearchOpen(false);
+                                      setShowChatMenu(false);
+                                      setShowExportSubmenu(false);
+                                      clearCurrentThread();
+                                    }}
+                                    className="w-full text-left px-2.5 py-2 rounded-xl hover:bg-rose-500/10 text-rose-600 dark:text-rose-400 flex items-center gap-2 transition-colors cursor-pointer font-medium"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <span>{t.clear}</span>
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
+
+                {isChatEmpty ? (
+                  <div className="relative z-10 flex-1 min-h-0 overflow-y-auto chat-scroll-clean px-4 py-6 flex flex-col">
+                    <div className="my-auto w-full flex flex-col items-center">
+                      <ChatEmptyState
+                        activeRole={activeRole}
+                        activeModel={activeModel}
+                        userName={authUser?.name || (isGuest ? 'Guest' : undefined)}
+                        developerMode={developerMode}
+                      />
+                      {pendingClarification && (
+                        <div className="w-full px-2 mb-3">
+                          <IntentClarificationCard
+                            clarification={pendingClarification}
+                            onSelectOption={handleSelectClarificationOption}
+                            onSkip={handleSkipClarification}
+                            onCancel={() => setPendingClarification(null)}
+                          />
+                        </div>
+                      )}
+                      <div className="workspace-input-container mt-2">
+                        <ChatInput
+                          onSendMessage={handleSendMessageWrapper}
+                          onStopStreaming={stopStreaming}
+                          isStreaming={isStreaming}
+                          activeModel={activeModel}
+                          onSelectModel={selectModel}
+                          onOpenPromptLibrary={() =>
+                            isGuest ? openAuthModal('Prompt Library') : setIsPromptModalOpen(true)
+                          }
+                          developerMode={developerMode}
+                          onOpenLiveVoice={() => setIsLiveVoiceOpen((v) => !v)}
+                          isLiveVoiceOpen={isLiveVoiceOpen}
+                          voiceStatus={liveVoice.status}
+                        />
+                      </div>
+                      <WorkspaceTipBar
+                        visible={showWorkspaceTips && effectiveRole === 'user'}
+                        onAction={(actionType) => {
+                          if (actionType === 'open-settings') {
+                            handleSelectTab('user-settings');
+                          } else if (actionType === 'open-knowledge') {
+                            handleSelectTab('user-knowledge');
+                          } else if (actionType === 'open-recipes') {
+                            setIsPromptModalOpen(true);
+                          } else if (actionType === 'prefill-research') {
+                            window.dispatchEvent(
+                              new CustomEvent('supremeai-insert-chat-prompt', {
+                                detail: { text: t.starterResearchPrompt, focus: true },
+                              })
+                            );
+                          }
+                        }}
+                        onMuteTips={() => {
+                          updateSettings({ showWorkspaceTips: false });
+                          toast.info(
+                            'Tips Hidden',
+                            'Re-enable Workspace Discovery Tips anytime in Settings.'
+                          );
+                        }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="relative z-10 flex-1 min-h-0 flex flex-col overflow-hidden">
+                    <ChatThread
+                      messages={currentSession?.messages || []}
+                      activeRole={activeRole}
+                      activeModel={activeModel}
+                      isStreaming={isStreaming}
+                      streamingContent={streamingContent}
+                      onSendPrompt={handleSendMessageWrapper}
+                      error={inferenceError}
+                      userName={authUser?.name || (isGuest ? 'Guest' : undefined)}
+                      developerMode={developerMode}
+                      onSpeakText={(txt) => liveVoice.speakFallbackText(txt)}
+                      isSearchOpen={isChatSearchOpen}
+                      onCloseSearch={() => setIsChatSearchOpen(false)}
+                    />
+
+                    {pendingClarification && (
+                      <div className="px-3 pb-2">
+                        <IntentClarificationCard
+                          clarification={pendingClarification}
+                          onSelectOption={handleSelectClarificationOption}
+                          onSkip={handleSkipClarification}
+                          onCancel={() => setPendingClarification(null)}
+                        />
+                      </div>
+                    )}
+
+                    <ChatInput
+                      onSendMessage={handleSendMessageWrapper}
+                      onStopStreaming={stopStreaming}
+                      isStreaming={isStreaming}
+                      activeModel={activeModel}
+                      onSelectModel={selectModel}
+                      onOpenPromptLibrary={() =>
+                        isGuest ? openAuthModal('Prompt Library') : setIsPromptModalOpen(true)
+                      }
+                      developerMode={developerMode}
+                      onOpenLiveVoice={() => setIsLiveVoiceOpen((v) => !v)}
+                      isLiveVoiceOpen={isLiveVoiceOpen}
+                      voiceStatus={liveVoice.status}
+                    />
+                  </div>
+                )}
+              </main>
+
+              {isLiveVoiceOpen && (
+                <Suspense fallback={null}>
+                  <LiveVoicePanel
+                    isOpen={isLiveVoiceOpen}
+                    status={liveVoice.status}
+                    voiceName={liveVoice.voiceName}
+                    liveModelText={liveVoice.liveModelText}
+                    levelsRef={liveVoice.levelsRef}
+                    inputGain={liveVoice.inputGain}
+                    onChangeInputGain={liveVoice.setInputGain}
+                    voicePitch={liveVoice.voicePitch}
+                    onChangeVoicePitch={liveVoice.setVoicePitch}
+                  />
+                </Suspense>
               )}
 
-              {/* Quick New Chat icon when in chat */}
-              <button
-                type="button"
-                onClick={startNewChat}
-                title={t.startNewChat}
-                aria-label={t.startNewChat}
-                className="p-2 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
+              {(!isGuest || isSharedArtifactView || hasGeneratedWorkspace) && (
+                <Suspense fallback={null}>
+                  <WorkspaceDock developerMode={developerMode} isGuest={isGuest} />
+                </Suspense>
+              )}
             </div>
-          </header>
+          )}
 
-          {/* In-chat search bar */}
-          {activeTab === 'chat' && chatSearchOpen && (
-            <div className="px-5 py-2 border-b border-slate-200/75 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 flex items-center justify-center">
-              <div className="w-full max-w-3xl flex items-center gap-2">
-                <Search className="w-4 h-4 text-slate-400" />
-                <input
-                  type="search"
-                  autoFocus
-                  value={chatSearchQuery}
-                  onChange={(e) => setChatSearchQuery(e.target.value)}
-                  placeholder={t.searchInChat}
-                  className="flex-1 bg-transparent border-0 outline-none text-xs text-slate-900 dark:text-slate-100"
-                />
+          {/* Unified Sub-View Shell with Back / Home / Close Bar & Responsive Containment */}
+          {activeTab !== 'chat' && (
+            <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden bg-transparent">
+              <div className="shrink-0 px-3 sm:px-6 py-2.5 border-b theme-surface-glass flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  {!sidebarOpen && (
+                    <button
+                      type="button"
+                      onClick={() => setSidebarOpen(true)}
+                      aria-label="Open sidebar"
+                      title="Open sidebar"
+                      className="p-1.5 rounded-lg border border-slate-200/80 dark:border-slate-700/80 bg-white/80 dark:bg-slate-900/80 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer shrink-0"
+                    >
+                      <PanelLeft className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  {effectiveRole === 'admin' && activeTab !== 'admin-overview' && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('admin-overview')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200/80 dark:border-slate-700/80 bg-white/80 dark:bg-slate-900/80 text-xs font-medium text-slate-700 dark:text-slate-200 hover:border-[var(--theme-accent)] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                      <span>{t.overview}</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('chat')}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200/80 dark:border-slate-700/80 bg-white/80 dark:bg-slate-900/80 text-xs font-medium text-slate-700 dark:text-slate-200 hover:border-[var(--theme-accent)] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    {effectiveRole === 'admin' ? (
+                      <Home className="w-3.5 h-3.5 theme-accent-text" />
+                    ) : (
+                      <ArrowLeft className="w-3.5 h-3.5 theme-accent-text" />
+                    )}
+                    <span>{effectiveRole === 'admin' ? t.chatHome : t.backToChat}</span>
+                  </button>
+
+                  <span
+                    aria-hidden="true"
+                    className="hidden sm:inline text-slate-300 dark:text-slate-700"
+                  >
+                    /
+                  </span>
+                  <span className="hidden sm:inline text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">
+                    {(() => {
+                      const localizedMap: Record<string, string> = {
+                        'chat-history': t.subviewChatHistory,
+                        'user-projects': t.subviewProjects,
+                        'user-api-keys': t.subviewApiKeys,
+                        'user-knowledge': t.subviewKnowledge,
+                        'user-team': t.subviewTeam,
+                        'user-billing': t.subviewBilling,
+                        usage: t.subviewUsage,
+                        'user-plugins': t.subviewPlugins,
+                        'user-settings': t.subviewSettings,
+                        'admin-overview': t.subviewAdminOverview,
+                        'hitl-policies': t.subviewHitlPolicies,
+                        'release-gate': t.subviewReleaseGate,
+                        'external-agents': t.subviewExternalAgents,
+                        'memory-graph': t.subviewMemoryGraph,
+                        'compute-fleet': t.subviewComputeFleet,
+                        'finops-omnichannel': t.subviewFinopsOmnichannel,
+                        'health-monitor': t.subviewHealthMonitor,
+                        'agent-swarm': t.subviewAgentSwarm,
+                        'task-queue': t.subviewTaskQueue,
+                        'schema-parity': t.subviewSchemaParity,
+                        'llm-gateway': t.subviewLlmGateway,
+                        'feature-flags': t.subviewFeatureFlags,
+                        'provider-keys': t.subviewProviderKeys,
+                        security: t.subviewSecurity,
+                        'system-audit': t.subviewSystemAudit,
+                        customers: t.subviewCustomers,
+                        'mcp-tower': t.subviewMcpTower,
+                        roles: t.subviewRoles,
+                        models: t.subviewModels,
+                        repos: t.subviewRepos,
+                        'live-sync': t.subviewLiveSync,
+                      };
+                      return (
+                        localizedMap[activeTab] ||
+                        SUBVIEW_TITLES[activeTab] ||
+                        t.workspaceFallbackTitle
+                      );
+                    })()}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <SyncStatusPill onOpen={() => setActiveTab('live-sync')} />
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('chat')}
+                    aria-label={t.close}
+                    title={t.close}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">{t.close}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
+                {isProjectAdmin &&
+                  (ADMIN_ONLY_TABS.has(activeTab) ||
+                    (activeTab === 'usage' && effectiveRole === 'admin')) && (
+                    <AdminConsoleNav
+                      activeTab={activeTab}
+                      onSelectTab={handleSelectTab}
+                      customersCount={customers.length}
+                      mcpAlertCount={mcpAlertCount}
+                      healthAlertCount={healthAlertCount || mcpAlertCount}
+                    />
+                  )}
+                <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
+                  <ErrorBoundary
+                    key={activeTab}
+                    fallbackTitle={`${SUBVIEW_TITLES[activeTab] || t.workspaceFallbackTitle} · ${t.viewErrorSuffix}`}
+                  >
+                    <Suspense
+                      fallback={
+                        <div className="flex-1 flex items-center justify-center p-12 text-xs text-slate-400">
+                          <div className="flex items-center gap-2">
+                            <div className="w-4 h-4 border-2 border-slate-300 dark:border-slate-700 border-t-[var(--theme-accent)] rounded-full animate-spin" />
+                            <span>Loading view...</span>
+                          </div>
+                        </div>
+                      }
+                    >
+                      {/* All Conversations / Chat History View */}
+                      {activeTab === 'chat-history' && (
+                        <ChatHistoryView
+                          sessions={sessions}
+                          activeSessionId={currentSession?.id || ''}
+                          onSelectSession={selectSession}
+                          onDeleteSession={deleteSession}
+                          onRenameSession={renameSession}
+                          onTogglePinSession={togglePinSession}
+                          onBranchSession={branchSession}
+                          onNewSession={createNewSession}
+                          onOpenChat={() => setActiveTab('chat')}
+                          developerMode={developerMode}
+                        />
+                      )}
+
+                      {/* 2. Customer Workspace Views */}
+                      {activeTab === 'user-projects' && (
+                        <UserProjectsView
+                          projects={userProjects}
+                          onAddProject={addProject}
+                          onDeleteProject={deleteProject}
+                          onChatWithProject={handleChatWithProject}
+                          onTriggerCodeReview={handleTriggerCodeReview}
+                          onForkProject={forkProject}
+                          onRefreshBuildStatus={refreshProjectBuildStatus}
+                        />
+                      )}
+
+                      {activeTab === 'user-api-keys' && (
+                        <UserApiKeysView
+                          apiKeys={apiKeys}
+                          onAddApiKey={addApiKey}
+                          onUpdateApiKey={updateApiKey}
+                          onRevokeApiKey={revokeApiKey}
+                          onDeleteApiKey={deleteApiKey}
+                          onProbeApiKey={probeApiKey}
+                          webhooks={webhooks}
+                          onAddWebhook={addWebhook}
+                          onDeleteWebhook={deleteWebhook}
+                          onTestWebhook={testWebhook}
+                        />
+                      )}
+
+                      {activeTab === 'user-knowledge' && (
+                        <UserKnowledgeBaseView
+                          documents={knowledgeDocs}
+                          onAddDocument={addKnowledgeDoc}
+                          onToggleGrounding={toggleKnowledgeGrounding}
+                          onDeleteDocument={deleteKnowledgeDoc}
+                        />
+                      )}
+
+                      {activeTab === 'user-team' && (
+                        <UserTeamView
+                          members={teamMembers}
+                          onInviteMember={inviteTeamMember}
+                          onUpdateRole={updateTeamRole}
+                          onRemoveMember={removeTeamMember}
+                          developerMode={developerMode}
+                          maxSeats={teamMaxSeats}
+                          planTier={authUser?.plan || userSettings.plan}
+                          onRefreshTeam={fetchTeamMembers}
+                        />
+                      )}
+
+                      {(activeTab === 'user-billing' ||
+                        (activeTab === 'usage' && effectiveRole !== 'admin')) && (
+                        <UserPlanUsageView
+                          planTier={authUser?.plan || userSettings.plan}
+                          invoices={invoices}
+                          currentTokensUsed={userSettings.monthlyTokensUsed}
+                          tokensLimit={userSettings.monthlyTokensLimit}
+                          sessions={sessions}
+                          darkMode={darkMode}
+                          onTopUpTokens={topUpTokens}
+                          developerMode={developerMode}
+                        />
+                      )}
+
+                      {activeTab === 'user-plugins' && (
+                        <UserPluginsView
+                          plugins={userPlugins}
+                          onTogglePlugin={togglePlugin}
+                          onAddCustomPlugin={addCustomPlugin}
+                        />
+                      )}
+
+                      {activeTab === 'user-settings' && (
+                        <UserSettingsView
+                          settings={userSettings}
+                          onUpdateSettings={updateSettings}
+                          isAdminEligible={isAuthorizedAdmin}
+                          onOpenAdminConsole={() => setActiveTab('admin-overview')}
+                          isDeveloperEligible={isDeveloperEligible}
+                          effectiveDeveloperMode={developerMode}
+                          onToggleDeveloperMode={handleToggleDeveloperMode}
+                          onToggleDeveloperEligibility={setDeveloperEligibility}
+                          trustedUntil={trustedBrowserUntil}
+                          onRevokeTrustedBrowser={revokeTrustedBrowser}
+                          onSignOut={logout}
+                          onOpenFeedbackSurvey={() => setIsSurveyForceOpen(true)}
+                          onOpenKnowledgeBase={() => setActiveTab('user-knowledge')}
+                          onOpenLiveVoice={() => {
+                            setActiveTab('chat');
+                            setIsLiveVoiceOpen(true);
+                          }}
+                          onPreviewVoice={(sampleText) =>
+                            liveVoice.speakFallbackText(sampleText || '')
+                          }
+                        />
+                      )}
+
+                      {/* 3. Admin Usage Analytics */}
+                      {activeTab === 'usage' && currentRole === 'admin' && (
+                        <UsageView sessions={sessions} darkMode={darkMode} />
+                      )}
+
+                      {/* 4. Admin Studio Command Center & Operations */}
+                      {isProjectAdmin && (
+                        <>
+                          {activeTab === 'admin-overview' && (
+                            <AdminOverviewView
+                              customers={customers}
+                              services={mcpServices}
+                              workers={swarmWorkers}
+                              jobs={queueJobs}
+                              onNavigateTab={setActiveTab}
+                              onOpenDangerConfirm={(action, title, description) =>
+                                setDangerConfirm({ action, title, description })
+                              }
+                            />
+                          )}
+
+                          {activeTab === 'hitl-policies' && <ControlCenterHitlPoliciesView />}
+
+                          {activeTab === 'release-gate' && <ControlCenterReleaseGateView />}
+
+                          {activeTab === 'external-agents' && <ControlCenterAgentBridgeView />}
+
+                          {activeTab === 'memory-graph' && <ControlCenterMemoryGraphView />}
+
+                          {activeTab === 'compute-fleet' && <ControlCenterComputeFleetView />}
+
+                          {activeTab === 'finops-omnichannel' && (
+                            <ControlCenterFinOpsOmnichannelView />
+                          )}
+
+                          {activeTab === 'agent-swarm' && (
+                            <AdminAgentSwarmView
+                              workers={swarmWorkers}
+                              onToggleWorkerStatus={toggleSwarmWorker}
+                              onScaleConcurrency={scaleWorker}
+                            />
+                          )}
+
+                          {activeTab === 'task-queue' && (
+                            <AdminTaskQueueView
+                              jobs={queueJobs}
+                              onRetryJob={retryQueueJob}
+                              onRetryAllDlq={retryAllDlq}
+                              onClearCompleted={clearCompletedJobs}
+                            />
+                          )}
+
+                          {activeTab === 'schema-parity' && (
+                            <AdminSchemaParityView
+                              tables={schemaTables}
+                              onRunParitySync={runParitySync}
+                            />
+                          )}
+
+                          {activeTab === 'llm-gateway' && (
+                            <AdminLlmGatewayView
+                              routes={gatewayRoutes}
+                              onToggleFailover={toggleFailover}
+                              onUpdatePrice={updateGatewayPrice}
+                            />
+                          )}
+
+                          {activeTab === 'feature-flags' && <AdminFeatureFlagsView />}
+
+                          {activeTab === 'provider-keys' && <AdminProviderKeysView />}
+
+                          {activeTab === 'security' && (
+                            <AdminSecurityView
+                              securityEvents={securityEvents}
+                              onAddBlockedIp={addBlockedIp}
+                              onRemoveBlockedIp={removeBlockedIp}
+                              blockedIps={blockedIps}
+                            />
+                          )}
+
+                          {activeTab === 'system-audit' && (
+                            <AdminSystemAuditView auditRecords={auditRecords} />
+                          )}
+
+                          {activeTab === 'customers' && (
+                            <AdminCustomersView
+                              customers={customers}
+                              onAddCustomer={addCustomer}
+                              onUpdateCustomer={updateCustomer}
+                              onDeleteCustomer={deleteCustomer}
+                              onImpersonateCustomer={(cust) => {
+                                impersonateCustomer(cust);
+                                setActiveTab('chat');
+                              }}
+                            />
+                          )}
+
+                          {activeTab === 'health-monitor' && <ControlCenterHealthMonitorView />}
+
+                          {activeTab === 'architecture-map' && <AdminArchitectureTopologyView />}
+
+                          {activeTab === 'visual-cockpit' && <AdminVisualCockpitView />}
+
+                          {activeTab === 'github-pipeline' && <AdminGitHubPipelineView />}
+
+                          {activeTab === 'mcp-tower' && (
+                            <AdminMcpTowerView
+                              services={mcpServices}
+                              onRebootService={rebootService}
+                              onRebootAll={rebootAllServices}
+                              onProbeCluster={probeCluster}
+                              isProbing={isProbingCluster}
+                            />
+                          )}
+                        </>
+                      )}
+
+                      {ADMIN_ONLY_TABS.has(activeTab) && !isProjectAdmin && (
+                        <div className="flex flex-col items-center justify-center p-12 text-center space-y-4">
+                          <AlertTriangle className="w-12 h-12 text-rose-500 animate-pulse" />
+                          <div className="space-y-1">
+                            <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                              Access Restricted
+                            </h3>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md">
+                              This console is restricted to verified project administrator accounts.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('chat')}
+                            className="px-4 py-2 rounded-xl theme-btn-primary text-xs font-semibold cursor-pointer"
+                          >
+                            Return to Chat
+                          </button>
+                        </div>
+                      )}
+
+                      {activeTab === 'roles' && (
+                        <RoleLab
+                          onSelectRoleForChat={(role, prompt) => {
+                            selectRole(role, prompt);
+                            setActiveTab('chat');
+                          }}
+                          onNavigateToChat={() => setActiveTab('chat')}
+                        />
+                      )}
+
+                      {activeTab === 'models' && (
+                        <ModelMatrix
+                          activeModel={activeModel}
+                          onSelectModel={selectModel}
+                          onNavigateToChat={() => setActiveTab('chat')}
+                        />
+                      )}
+
+                      {activeTab === 'repos' && <RepoHub />}
+
+                      {activeTab === 'live-sync' && <FederationSyncView />}
+                    </Suspense>
+                  </ErrorBoundary>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Danger Zone Confirmation Modal */}
+        {dangerConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-6 border border-rose-200 dark:border-rose-900/60 shadow-xl space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400">
+                  <AlertTriangle className="w-5 h-5 shrink-0" />
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    {dangerConfirm.title}
+                  </h3>
+                </div>
                 <button
                   type="button"
-                  onClick={() => {
-                    setChatSearchQuery('');
-                    setChatSearchOpen(false);
-                  }}
-                  aria-label={t.close}
-                  className="p-1 rounded-md text-slate-400 hover:text-slate-800 dark:hover:text-white cursor-pointer"
+                  onClick={() => setDangerConfirm(null)}
+                  className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
+              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                {dangerConfirm.description}
+              </p>
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setDangerConfirm(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isDangerRunning}
+                  onClick={handleExecuteDangerAction}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  {isDangerRunning ? 'Executing...' : 'Confirm Action'}
+                </button>
+              </div>
             </div>
+          </div>
+        )}
+
+        {/* Modals & Dialogs */}
+        <Suspense fallback={null}>
+          {isRoleModalOpen && (
+            <RoleModal
+              isOpen={isRoleModalOpen}
+              onClose={() => setIsRoleModalOpen(false)}
+              activeRole={activeRole}
+              customInstruction={customInstruction}
+              onSaveRole={(role, prompt) => selectRole(role, prompt)}
+              activeModel={activeModel}
+              onSelectModel={selectModel}
+            />
           )}
 
-          {/* Active Viewport */}
-          {activeTab === 'chat' ? (
-            <>
-              <section className="flex-1 min-h-0 overflow-y-auto studio-scroll flex flex-col">
-                {messages.length === 0 ? (
-                  <ChatEmptyState
-                    userName={userName}
-                    activeModel={activeModel}
-                    activeRole={activeRole}
-                    onSelectPrompt={(prompt) => {
-                      setDraft(prompt);
-                    }}
-                  />
-                ) : (
-                  <>
-                    <ChatThread
-                      messages={messages}
-                      searchQuery={chatSearchQuery}
-                      speaking={speaking}
-                      onSpeak={(text) => void speak(text, lang)}
-                      onStopSpeaking={stopSpeaking}
-                      onRegenerate={(msg) => {
-                        const prevUser =
-                          msg.retryPrompt ??
-                          messages
-                            .slice(0, messages.findIndex((m) => m.id === msg.id))
-                            .reverse()
-                            .find((m) => m.role === 'user')?.content ??
-                          '';
-                        if (prevUser) void sendMessage(prevUser, undefined, msg.id);
-                      }}
-                      onRetry={(prompt, id) => void sendMessage(prompt, undefined, id)}
-                      onOpenCodeInDock={openCodeInDock}
-                    />
-                    <div ref={threadEndRef} />
-                  </>
-                )}
-              </section>
-
-              <ChatInput
-                draft={draft}
-                onDraftChange={setDraft}
-                busy={busy}
-                activeModel={activeModel}
-                onSelectModel={setActiveModel}
-                activeRole={activeRole}
-                activeKnowledgeCount={activeKnowledgeDocs.length}
-                notice={notice}
-                onDismissNotice={() => setNotice('')}
-                onSend={(text, atts) => void sendMessage(text, atts)}
-                onStop={stopGenerating}
-                onToggleHologram={() => setHologramOpen((v) => !v)}
-                hologramOpen={hologramOpen}
-              />
-            </>
-          ) : (
-            <div className="flex-1 min-h-0 overflow-y-auto studio-scroll">
-              {activeTab === 'chat-history' && (
-                <ChatHistoryView
-                  sessions={savedChats}
-                  onOpenChat={openChat}
-                  onTogglePin={togglePinChat}
-                  onExportChat={exportChat}
-                  onDeleteChat={deleteChat}
-                  onNewChat={startNewChat}
-                />
-              )}
-
-              {activeTab === 'roles' && (
-                <RolesView
-                  roles={allRoles}
-                  activeRoleId={activeRole.id}
-                  onSelectRole={(role) => {
-                    setActiveRoleId(role.id);
-                    const suggested = STUDIO_MODELS.find((m) => m.id === role.suggestedModel);
-                    if (suggested) setActiveModel(suggested);
-                    setActiveTab('chat');
-                  }}
-                  onAddRole={(role) => setCustomRoles((prev) => [role, ...prev])}
-                  onDeleteRole={(id) => {
-                    setCustomRoles((prev) => prev.filter((r) => r.id !== id));
-                    if (activeRoleId === id) setActiveRoleId(SYSTEM_ROLES[0].id);
-                  }}
-                />
-              )}
-
-              {activeTab === 'projects' && (
-                <ProjectsView
-                  projects={projects}
-                  onAddProject={(proj) => setProjects((prev) => [proj, ...prev])}
-                  onDeleteProject={(id) => setProjects((prev) => prev.filter((p) => p.id !== id))}
-                  onChatWithProject={handleChatWithProject}
-                  onReviewProject={handleReviewProject}
-                />
-              )}
-
-              {activeTab === 'knowledge' && (
-                <KnowledgeView
-                  docs={knowledgeDocs}
-                  onAddDoc={(doc) => setKnowledgeDocs((prev) => [doc, ...prev])}
-                  onToggleDoc={(id) =>
-                    setKnowledgeDocs((prev) =>
-                      prev.map((d) => (d.id === id ? { ...d, enabled: !d.enabled } : d))
-                    )
-                  }
-                  onDeleteDoc={(id) =>
-                    setKnowledgeDocs((prev) => prev.filter((d) => d.id !== id))
-                  }
-                />
-              )}
-
-              {activeTab === 'plugins' && (
-                <UserPluginsView
-                  plugins={plugins}
-                  onTogglePlugin={(id) =>
-                    setPlugins((prev) =>
-                      prev.map((p) => (p.id === id ? { ...p, isEnabled: !p.isEnabled } : p))
-                    )
-                  }
-                  onAddCustomPlugin={(item) =>
-                    setPlugins((prev) => [{ ...item, id: newId('plugin') }, ...prev])
-                  }
-                />
-              )}
-
-              {activeTab === 'settings' && (
-                <SettingsView
-                  onOpenCompanion={() => {
-                    setHologramOpen(true);
-                    setActiveTab('chat');
-                  }}
-                  runtimeLabel={runtimeLabel}
-                  syncEnabled={syncEnabled}
-                  lastSyncedAt={lastSyncedAt}
-                  onToggleSync={(next) => {
-                    setSyncEnabled(next);
-                    saveSyncEnabled(next);
-                  }}
-                  onSyncNow={async () => {
-                    const themeState = useThemeStore.getState();
-                    await syncClientRef.current?.syncNow({
-                      chats: { updatedAt: Date.now(), items: savedChats },
-                      theme: {
-                        updatedAt: Date.now(),
-                        data: {
-                          themeMode: themeState.themeMode,
-                          liveTheme: themeState.liveTheme,
-                          liveMotion: themeState.liveMotion,
-                          motionSpeed: themeState.motionSpeed,
-                          surfaceTone: themeState.surfaceTone,
-                          scrimIntensity: themeState.scrimIntensity,
-                        },
-                      },
-                      roles: { updatedAt: Date.now(), items: customRoles },
-                      knowledge: { updatedAt: Date.now(), items: knowledgeDocs },
-                      plugins: { updatedAt: Date.now(), items: plugins },
-                    });
-                  }}
-                />
-              )}
-            </div>
+          {isAdminAuthModalOpen && (
+            <AdminAuthModal
+              isOpen={isAdminAuthModalOpen}
+              onClose={() => setIsAdminAuthModalOpen(false)}
+              onSuccess={() => {
+                setIsAdminAuthModalOpen(false);
+                setRole('admin');
+                setActiveTab('admin-overview');
+              }}
+            />
           )}
-        </main>
 
-        {/* SupremeAI Frontend 3D Real-time Voice Companion */}
-        <LiveVoicePanel
-          isOpen={hologramOpen}
-          isDark={resolvedScheme === 'dark'}
-          voiceName={voiceConfig.persona}
-          isSpeaking={speaking}
-          isStreaming={busy}
-          streamingContent={streamingAssistantText}
-          latestAssistantContent={latestAssistantReply || ''}
-          onVoiceChange={(persona) => updateVoiceConfig({ persona })}
-          onVoiceSpeedChange={(speed) => updateVoiceConfig({ speed })}
-          onSpeakLatest={() => {
-            const textToRead = latestAssistantReply || t.testVoicePhrase;
-            void speak(textToRead, lang);
-          }}
-          onStopSpeaking={stopSpeaking}
-          onClose={() => setHologramOpen(false)}
-        />
+          {isTwoFactorModalOpen && (
+            <AdminTwoFactorModal
+              isOpen={isTwoFactorModalOpen}
+              onClose={() => setIsTwoFactorModalOpen(false)}
+              onSuccess={(newTrustedUntil) => {
+                if (newTrustedUntil) {
+                  localStorage.setItem('supremeai_trusted_browser_until', String(newTrustedUntil));
+                  useAuthStore.setState({ trustedBrowserUntil: newTrustedUntil });
+                }
+                setIsTwoFactorModalOpen(false);
+                useAuthStore.setState({ currentRole: 'admin' });
+                localStorage.setItem('supremeai_studio_user_role', 'admin');
+                setActiveTab('admin-overview');
+              }}
+              userEmail={authUser?.email || ''}
+            />
+          )}
 
-        {/* Resizable Workspace Dock (Preview / Monaco Code / xterm.js Terminal) */}
-        <WorkspaceDock
-          isOpen={dockOpen}
-          onClose={() => setDockOpen(false)}
-          activeTab={dockTab}
-          onTabChange={setDockTab}
-          files={workspaceFiles}
-          activeFileId={activeFileId}
-          onSelectFile={setActiveFileId}
-          onUpdateFile={(id, content) =>
-            setWorkspaceFiles((prev) =>
-              prev.map((f) => (f.id === id ? { ...f, content } : f))
-            )
-          }
-          onCreateFile={createWorkspaceFile}
-          resolvedScheme={resolvedScheme}
-          activeModelName={activeModel.name}
-          gatewayStatus={
-            gatewayStatus === 'connected'
-              ? t.statusConnected
-              : gatewayStatus === 'offline'
-                ? t.statusOffline
-                : t.statusGuest
-          }
-          runtimeLabel={runtimeLabel}
-        />
+          {hitlActiveRequest && (
+            <HitlApprovalModal
+              isOpen={Boolean(hitlActiveRequest)}
+              request={hitlActiveRequest}
+              onApprove={async (id) => {
+                await approveHitl(id);
+              }}
+              onReject={async (id, reason) => {
+                await rejectHitl(id, reason);
+              }}
+              onClose={dismissHitl}
+              isProcessing={isHitlProcessing}
+            />
+          )}
+
+          {isProjectAdmin && <ControlCenterSafetyGateModal />}
+
+          {isPromptModalOpen && (
+            <PromptLibraryModal
+              isOpen={isPromptModalOpen}
+              onClose={() => setIsPromptModalOpen(false)}
+              onSelectTemplate={(text) => handleSendMessageWrapper(text)}
+              developerMode={developerMode}
+            />
+          )}
+
+          {isGuest && authModal.open && (
+            <AuthPage
+              isModal
+              authReason={authModal.reason}
+              onClose={() => setAuthModal({ open: false })}
+              onLoginSuccess={() => {
+                setAuthModal({ open: false });
+                setActiveTab('chat');
+              }}
+              darkMode={darkMode}
+            />
+          )}
+        </Suspense>
+
+        {!isGuest && (
+          <WorkspaceMicroSurvey
+            totalUserMessages={totalUserMessages}
+            userEmail={authUser?.email}
+            developerMode={developerMode}
+            forceOpen={isSurveyForceOpen}
+            onCloseForceOpen={() => setIsSurveyForceOpen(false)}
+          />
+        )}
+
+        <ToastContainer />
       </div>
-
-      {/* Command Palette (⌘K) */}
-      <CommandPalette
-        open={commandOpen}
-        onClose={() => setCommandOpen(false)}
-        resolvedScheme={resolvedScheme}
-        sidebarOpen={sidebarOpen}
-        onNewChat={startNewChat}
-        onOpenHistory={() => setActiveTab('chat-history')}
-        onOpenRoles={() => setActiveTab('roles')}
-        onOpenProjects={() => setActiveTab('projects')}
-        onOpenKnowledge={() => setActiveTab('knowledge')}
-        onOpenSettings={() => setActiveTab('settings')}
-        onOpenAdmin={() => setAdminOpen(true)}
-        onOpenFeedback={() => setFeedbackOpen(true)}
-        onToggleDock={() => setDockOpen((v) => !v)}
-        onToggleHologram={() => setHologramOpen((v) => !v)}
-        onToggleTheme={() => setThemeMode(resolvedScheme === 'dark' ? 'light' : 'dark')}
-        onToggleLanguage={() => setLang(lang === 'bn' ? 'en' : 'bn')}
-        onToggleSidebar={() => setSidebarOpen((v) => !v)}
-      />
-
-      {/* Admin Control Center */}
-      {adminOpen && <AdminDashboard onClose={() => setAdminOpen(false)} />}
-
-      {/* Product Pulse Feedback Widget */}
-      <FeedbackWidget
-        totalUserMessages={userMessageCount}
-        forceOpen={feedbackOpen}
-        onCloseForceOpen={() => setFeedbackOpen(false)}
-      />
-    </div>
+    </ErrorBoundary>
   );
 }

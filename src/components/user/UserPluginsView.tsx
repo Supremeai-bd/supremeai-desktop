@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Puzzle, Check, Search, Plus, X } from 'lucide-react';
-import type { PluginItem } from '../../types/studio';
-import { useI18n } from '../../i18n';
+import { PluginItem } from '../../types';
+import { useI18n } from '../../utils/i18n';
 
 interface UserPluginsViewProps {
   plugins: PluginItem[];

@@ -1,45 +1,54 @@
-# SupremeAI Studio — Unified Monorepo Architecture
+# SupremeAI Studio — True Single-Source Architecture (Web + Desktop + Android)
 
-All three SupremeAI client applications (**Web**, **Desktop**, and **Android**) now live in **one unified repository** with shared contracts, identical visual design, and a canonical Real-Time Cross-Device Sync protocol connected to the SupremeAI Gateway (`https://supremeai-api-ulw0.onrender.com`).
+All three SupremeAI platforms (**Web**, **Windows/macOS/Linux Desktop**, and **Android APK**) are built from **one single React 19 UI + one Tauri v2 Rust core**, with **zero duplicate UI code** and a unified Real-Time Cross-Device Sync protocol connected to the SupremeAI Gateway (`https://supremeai-api-ulw0.onrender.com`).
 
 ## Repository Layout
 
 ```text
 .
-├── src/                         # Unified React 19 + TypeScript + Tailwind v4 Studio UI (Web + Desktop)
-│   ├── auth/                    # Direct Guest -> Inline Login + Quick-Lock PIN (preserved desktop UX)
+├── src/                         # Single Source of UI & Logic (React 19 + TypeScript + Tailwind v4)
+│   │                            # Runs identically on Web, Desktop, and Android!
+│   ├── auth/                    # Direct Guest -> Inline Login + Full Auth Modal + Quick-Lock PIN
 │   ├── bridge/                  # Hybrid Tauri v2 Rust IPC + Web Gateway SSE bridge
 │   ├── companion/               # Articulated Three.js 3D Hologram Companion (Aria / Orion / Custom Photo)
-│   ├── components/              # LiveScreenBackdrop, ThemeControlPopover, PromptLibraryModal, Plugins, WorkspaceDock
+│   ├── components/              # LiveScreenBackdrop (11 Themes), Admin Control Center, 7-Tab WorkspaceDock
 │   ├── stores/                  # Zustand 11-theme Live Screen & surface token engine
 │   └── sync/                    # Real-Time Cross-Device Sync engine (BroadcastChannel + Gateway SSE/REST)
-├── src-tauri/                   # Native Desktop Shell (Rust + Tauri v2, Windows/macOS/Linux + optional Tauri Mobile)
-├── apps/
-│   └── mobile-android/          # Native Android App (Kotlin 2.2, Jetpack Compose M3, Room SQLite v2, OkHttp SSE)
-│       └── app/src/main/java/com/example/data/RealtimeSyncEngine.kt
+├── src-tauri/                   # Single Native Core (Rust + Tauri v2) for BOTH Desktop & Android
+│   ├── Cargo.toml               # Exports [lib] supremeai_lib (cdylib/staticlib for Android) + [[bin]] desktop
+│   ├── tauri.conf.json          # Unified Desktop (NSIS/MSI) + Android (minSdkVersion 26) config
+│   └── src/
+│       ├── lib.rs               # #[cfg_attr(mobile, tauri::mobile_entry_point)] pub fn run()
+│       ├── main.rs              # Thin desktop binary launcher -> supremeai_lib::run()
+│       ├── auth.rs              # Persisted user sessions & secure store (Desktop + Android)
+│       ├── admin.rs             # Admin control plane commands
+│       ├── feedback.rs          # Authenticated feedback bridge
+│       └── speech.rs            # Native TTS speech bridge
 ├── packages/
-│   └── contracts/               # Single Source of Truth across Web, Desktop & Android
-│       ├── models.json          # Canonical 6 SupremeAI foundation models & gateway routes
-│       ├── themes.json          # Canonical 11 Live Screen theme IDs & accent hex tokens
-│       └── sync-protocol.json   # Canonical Real-Time Cross-Device Sync envelope & conflict rules
-└── .github/workflows/           # Unified CI/CD for Web, Desktop Installers & Android APK
+│   └── contracts/               # Canonical model catalog, 11 theme tokens, and sync protocol schema
+├── server.ts                    # Unified Express + Vite Dev / Production Web Server (port 3000)
+└── .github/workflows/
+    ├── ci.yml                   # 3-platform PR/push gate: Web + Desktop Rust + Tauri Android APK
+    └── release-all.yml          # One git push -> Auto-build & release Web + .exe/.msi + signed .apk
 ```
 
 ## Unified Commands
 
-- **Web / Desktop Dev Server**: `npm run dev` (runs on port `3000`)
+- **Web / App Dev Server**: `npm run dev` (runs on port `3000`)
 - **Web Production Build**: `npm run build:web`
-- **Desktop Dev (Tauri v2 + Rust)**: `npm run tauri:dev`
-- **Desktop Installer Build**: `npm run tauri:build`
-- **Android Debug APK**: `npm run android:debug`
-- **Android Release APK**: `npm run android:release`
+- **Shared Native App Bundle (Desktop + Android)**: `npm run build:app`
+- **Desktop Dev (Tauri v2)**: `npm run tauri:dev`
+- **Desktop Installer Build (.exe / .msi)**: `npm run tauri:build`
+- **Android Init (one-time per machine)**: `npm run tauri:android:init`
+- **Android Dev (Emulator / USB Device)**: `npm run tauri:android:dev`
+- **Android APK Build**: `npm run tauri:android:build`
+- **Sync Version Across All Platforms**: `npm run version:sync`
 
-## Real-Time Cross-Device Sync Protocol
+## One Push -> All 3 Platforms Updated
 
-Web, Desktop (`src/sync/realtimeSync.ts`), and Android (`apps/mobile-android/.../RealtimeSyncEngine.kt`) implement the exact same `packages/contracts/sync-protocol.json` envelope:
-
-- **Domains Synced**: `chats`, `theme`, `roles`, `knowledge`, `plugins`, `voice_avatar`
-- **Transport**:
-  - Instant local multi-window/tab sync via `BroadcastChannel('supremeai.realtime.sync.v1')`
-  - Authenticated cloud real-time sync via `GET/PUT /api/v1/sync/state` and SSE `GET /api/v1/sync/stream`
-- **Offline-First Merge**: Deterministic Last-Write-Wins (per-conversation `updatedAt` merge for chats) so all three apps stay fast and functional offline and reconcile automatically once online.
+1. Edit anything in `src/` (UI, 3D Companion, Live Themes, Admin Dashboard, Auth, Sync).
+2. Commit & `git push origin main` (or push a version tag like `git tag v2.6.0 && git push origin v2.6.0`).
+3. GitHub Actions (`release-all.yml`) automatically builds and publishes:
+   - **Web Studio** (`supremeai-web-dist.tar.gz` + optional Cloudflare Pages auto-deploy)
+   - **Windows Desktop** (`.exe` NSIS + `.msi` installers)
+   - **Android APK** (`SupremeAI-Studio-*.apk` built via Tauri v2 + signed with `apksigner`)

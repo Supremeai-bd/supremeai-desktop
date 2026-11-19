@@ -1,459 +1,742 @@
-import { useState, type FormEvent, type MouseEvent } from 'react';
+import React, { useState } from 'react';
 import {
-  BookOpen,
-  Check,
-  Download,
-  Edit2,
+  Plus,
   FolderGit2,
-  History,
-  MessageSquare,
-  MessageSquareHeart,
+  Puzzle,
+  Settings,
+  Trash2,
+  Edit2,
+  Check,
+  Users,
+  Key,
+  BookOpen,
+  CreditCard,
+  LogOut,
   PanelLeft,
   Pin,
-  Plus,
-  Puzzle,
-  Search,
-  Settings,
-  Shield,
+  History,
+  Lock,
+  LogIn,
+  MessageSquare,
   Sparkles,
-  Trash2,
+  Activity,
+  X,
+  ChevronDown,
+  ChevronRight,
+  Brain,
 } from 'lucide-react';
-import UserSessionPanel from '../auth/UserSessionPanel';
-import { BrandMark } from './BrandMark';
-import LanguageToggle from './LanguageToggle';
+import { ChatSession, RolePersona, AuthUser } from '../types';
 import { ThemeControlPopover } from './theme/ThemeControlPopover';
-import { useI18n } from '../i18n';
-import type {
-  ActiveTab,
-  RolePersona,
-  SavedChat,
-} from '../types/studio';
+import { useI18n } from '../utils/i18n';
+import { useFederationStore } from '../stores/useFederationStore';
+import { useAuthStore } from '../stores/useAuthStore';
+import { clearUserMemory, loadUserMemory } from '../services/intentOrchestrator';
 
 interface SidebarProps {
-  isOpen: boolean;
-  onClose: () => void;
-  activeTab: ActiveTab;
-  onSelectTab: (tab: ActiveTab) => void;
-  sessions: SavedChat[];
+  sessions: ChatSession[];
   activeSessionId: string;
-  onSelectSession: (chat: SavedChat) => void;
-  onNewChat: () => void;
-  onRenameSession: (id: string, title: string) => void;
+  onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
-  onTogglePin: (id: string) => void;
-  onExportSession: (chat: SavedChat) => void;
+  onRenameSession: (id: string, newTitle: string) => void;
+  onTogglePinSession?: (id: string) => void;
+  onNewSession: () => void;
   activeRole: RolePersona;
-  projectsCount: number;
-  activeKnowledgeCount: number;
-  activePluginsCount: number;
-  onOpenAdmin: () => void;
-  onOpenFeedback: () => void;
-  onSessionEmailChange: (email: string | null) => void;
+  onOpenRoleModal: () => void;
+  isOpen: boolean;
+  onToggleOpen: () => void;
+  onSelectTab: (tab: string) => void;
+  activeTab: string;
+  projectsCount?: number;
+  activePluginsCount?: number;
+  authUser?: AuthUser | null;
+  onSignOut?: () => void;
+  developerMode?: boolean;
+  enableKnowledgeGrounding?: boolean;
+  tokensUsed?: number;
+  tokensLimit?: number;
+  isGuest?: boolean;
+  onRequestAuth?: (reason?: string) => void;
+  generatingTitleIds?: string[];
 }
 
-export function Sidebar({
-  isOpen,
-  onClose,
-  activeTab,
-  onSelectTab,
+export const Sidebar: React.FC<SidebarProps> = ({
   sessions,
   activeSessionId,
   onSelectSession,
-  onNewChat,
-  onRenameSession,
   onDeleteSession,
-  onTogglePin,
-  onExportSession,
-  activeRole,
-  projectsCount,
-  activeKnowledgeCount,
-  activePluginsCount,
-  onOpenAdmin,
-  onOpenFeedback,
-  onSessionEmailChange,
-}: SidebarProps) {
-  const { t } = useI18n();
-  const [filterQuery, setFilterQuery] = useState('');
+  onRenameSession,
+  onTogglePinSession,
+  onNewSession,
+  isOpen,
+  onToggleOpen,
+  onSelectTab,
+  activeTab,
+  projectsCount = 2,
+  activePluginsCount = 4,
+  authUser,
+  onSignOut,
+  developerMode = false,
+  enableKnowledgeGrounding = false,
+  tokensUsed = 0,
+  tokensLimit = 1000000,
+  isGuest = false,
+  onRequestAuth,
+  generatingTitleIds = [],
+}) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [inlineLoginOpen, setInlineLoginOpen] = useState(false);
+  const [inlineEmail, setInlineEmail] = useState('');
+  const [inlinePassword, setInlinePassword] = useState('');
+  const [inlineError, setInlineError] = useState('');
+  const [showMoreWorkspace, setShowMoreWorkspace] = useState(false);
+  const [memoryTopicsCount, setMemoryTopicsCount] = useState(() => loadUserMemory().recentTopics.length);
+  const authLogin = useAuthStore((s) => s.login);
+  const authLoading = useAuthStore((s) => s.isLoading);
 
-  if (!isOpen) return null;
+  const handleInlineGuestLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setInlineError('');
+    if (!inlineEmail.trim() || !inlinePassword) {
+      setInlineError('Enter both email and password.');
+      return;
+    }
+    const ok = await authLogin(inlineEmail.trim(), inlinePassword);
+    if (ok) {
+      setInlineLoginOpen(false);
+      setInlineEmail('');
+      setInlinePassword('');
+    } else {
+      setInlineError('Invalid credentials. Please check and try again.');
+    }
+  };
 
-  const q = filterQuery.trim().toLowerCase();
-  const matching = sessions.filter(
-    (s) =>
-      !q ||
-      s.title.toLowerCase().includes(q) ||
-      s.messages.some((m) => m.content.toLowerCase().includes(q))
-  );
-  const pinnedSessions = matching.filter((s) => s.isPinned);
-  const recentSessions = matching
+  const { t } = useI18n();
+  const federationOnline = useFederationStore((s) => s.pulse.online);
+  const federationTotal = useFederationStore((s) => s.pulse.total);
+
+  const pinnedSessions = sessions.filter((s) => s.isPinned);
+  const recentSessions = [...sessions]
     .filter((s) => !s.isPinned)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, 20);
+    .sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt))
+    .slice(0, 18);
 
-  const startEditing = (session: SavedChat, e: MouseEvent) => {
+  const usagePercent = Math.min(100, Math.round((tokensUsed / Math.max(1, tokensLimit)) * 100));
+
+  const startEditing = (session: ChatSession, e: React.MouseEvent) => {
     e.stopPropagation();
-    setConfirmDeleteId(null);
     setEditingId(session.id);
     setEditingTitle(session.title);
   };
 
-  const commitRename = (id: string, e?: FormEvent) => {
-    e?.preventDefault();
+  const saveEditing = (id: string, e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (editingTitle.trim()) {
       onRenameSession(id, editingTitle.trim());
     }
     setEditingId(null);
   };
 
-  const renderRow = (session: SavedChat) => {
+  if (!isOpen) return null;
+
+  const renderSessionRow = (session: ChatSession) => {
     const isActive = session.id === activeSessionId && activeTab === 'chat';
-    const isDeleting = confirmDeleteId === session.id;
 
     return (
       <div
         key={session.id}
         onClick={() => {
-          onSelectSession(session);
+          onSelectSession(session.id);
           onSelectTab('chat');
         }}
-        className={`group relative flex items-center justify-between gap-1 px-2.5 py-2 rounded-xl text-xs cursor-pointer transition-colors ${
+        className={`group relative flex items-center justify-between px-3 py-2 rounded-lg text-xs cursor-pointer transition-colors ${
           isActive
-            ? 'bg-slate-200/80 dark:bg-slate-800/90 text-slate-900 dark:text-white font-semibold'
-            : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/45 dark:hover:bg-slate-800/55 hover:text-slate-900 dark:hover:text-white'
+            ? 'bg-slate-200/70 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
+            : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200'
         }`}
       >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
+        <div className="flex items-center gap-2 min-w-0 flex-1 pr-1">
+          <div
+            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+              isActive ? 'bg-blue-500' : session.isPinned ? 'bg-amber-400' : 'bg-transparent'
+            }`}
+          />
+
           {editingId === session.id ? (
             <form
-              onSubmit={(e) => commitRename(session.id, e)}
+              onSubmit={(e) => saveEditing(session.id, e)}
               onClick={(e) => e.stopPropagation()}
-              className="flex items-center gap-1 w-full"
+              className="flex-1 flex items-center gap-1"
             >
               <input
                 type="text"
                 autoFocus
                 value={editingTitle}
                 onChange={(e) => setEditingTitle(e.target.value)}
-                onBlur={() => commitRename(session.id)}
-                className="w-full px-1.5 py-0.5 rounded-md text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100"
+                onBlur={() => saveEditing(session.id)}
+                className="w-full px-1.5 py-0.5 bg-white dark:bg-slate-700 rounded text-xs text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-600 focus:outline-none"
               />
               <button
                 type="submit"
-                aria-label="Save title"
-                className="p-0.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 cursor-pointer"
+                aria-label="Save"
+                className="p-0.5 text-slate-600 dark:text-slate-300 hover:text-slate-900"
               >
-                <Check className="w-3.5 h-3.5" />
+                <Check className="w-3 h-3" />
               </button>
             </form>
           ) : (
-            <span
-              className="truncate"
-              title={session.title}
-              onDoubleClick={(e) => startEditing(session, e)}
-            >
-              {session.title}
-            </span>
+            <div className="flex items-center gap-1.5 min-w-0 flex-1">
+              <span title={session.title} className="truncate text-xs">
+                {session.title}
+              </span>
+              {generatingTitleIds.includes(session.id) && (
+                <Sparkles
+                  aria-label="Generating concise title"
+                  className="w-3 h-3 text-cyan-500 animate-pulse shrink-0"
+                />
+              )}
+            </div>
           )}
         </div>
 
+        {/* Action buttons: always visible on active session and touch viewports, hover-revealed on desktop */}
         {editingId !== session.id && (
           <div
-            onClick={(e) => e.stopPropagation()}
-            className={`flex items-center gap-0.5 shrink-0 transition-opacity ${
-              isActive || isDeleting
+            className={`flex items-center gap-0.5 transition-opacity shrink-0 ${
+              isActive
                 ? 'opacity-100'
-                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+                : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 group-focus-within:opacity-100'
             }`}
           >
-            {isDeleting ? (
+            {onTogglePinSession && (
               <button
                 type="button"
-                onClick={() => {
-                  onDeleteSession(session.id);
-                  setConfirmDeleteId(null);
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTogglePinSession(session.id);
                 }}
-                className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-rose-600 text-white hover:bg-rose-700 cursor-pointer"
+                aria-label={session.isPinned ? 'Unpin conversation' : 'Pin conversation'}
+                title={session.isPinned ? 'Unpin' : 'Pin'}
+                className={`p-1 rounded transition-colors ${
+                  session.isPinned
+                    ? 'text-amber-500 hover:text-amber-600'
+                    : 'text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                }`}
               >
-                {t.deleteConversation}
+                <Pin className="w-3 h-3" />
               </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={() => onTogglePin(session.id)}
-                  aria-label={session.isPinned ? t.unpinConversation : t.pinConversation}
-                  title={session.isPinned ? t.unpinConversation : t.pinConversation}
-                  className={`p-1 rounded-md cursor-pointer ${
-                    session.isPinned
-                      ? 'text-amber-500'
-                      : 'text-slate-400 hover:text-slate-800 dark:hover:text-slate-100'
-                  }`}
-                >
-                  <Pin className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onExportSession(session)}
-                  aria-label={t.exportConversation}
-                  title={t.exportConversation}
-                  className="p-1 rounded-md text-slate-400 hover:text-slate-800 dark:hover:text-slate-100 cursor-pointer"
-                >
-                  <Download className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => startEditing(session, e)}
-                  aria-label={t.renameConversation}
-                  title={t.renameConversation}
-                  className="p-1 rounded-md text-slate-400 hover:text-slate-800 dark:hover:text-slate-100 cursor-pointer"
-                >
-                  <Edit2 className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmDeleteId(session.id)}
-                  aria-label={t.deleteConversation}
-                  title={t.deleteConversation}
-                  className="p-1 rounded-md text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 cursor-pointer"
-                >
-                  <Trash2 className="w-3 h-3" />
-                </button>
-              </>
             )}
+            <button
+              type="button"
+              onClick={(e) => startEditing(session, e)}
+              aria-label="Rename"
+              className="p-1 hover:text-slate-900 dark:hover:text-slate-100 text-slate-400 rounded"
+            >
+              <Edit2 className="w-3 h-3" />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDeleteSession(session.id);
+              }}
+              aria-label="Delete"
+              className="p-1 hover:text-rose-600 dark:hover:text-rose-400 text-slate-400 rounded"
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
           </div>
         )}
       </div>
     );
   };
 
-  const navBtnClass = (tab: ActiveTab) =>
-    `w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
-      activeTab === tab
-        ? 'bg-slate-200/75 dark:bg-slate-800/90 text-slate-900 dark:text-white font-semibold'
-        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/45 dark:hover:bg-slate-800/55 hover:text-slate-900 dark:hover:text-white'
-    }`;
-
   return (
-    <aside
-      aria-label={t.mainNavigation}
-      className="w-[268px] shrink-0 h-full flex flex-col border-r theme-sidebar-surface select-none z-20"
-    >
-      {/* Brand header */}
-      <div className="flex items-center justify-between gap-2 px-3.5 pt-3.5 pb-2.5">
-        <button
-          type="button"
-          onClick={() => onSelectTab('chat')}
-          className="flex items-center gap-2.5 min-w-0 cursor-pointer text-left"
-        >
-          <BrandMark size={30} />
-          <div className="min-w-0">
-            <div className="text-sm font-bold tracking-tight text-slate-900 dark:text-white leading-tight whitespace-nowrap">
-              SupremeAI <span className="theme-accent-text font-semibold">Studio</span>
-            </div>
-            <div className="text-[10px] font-mono text-slate-500 dark:text-slate-400 tracking-wide">
-              Desktop v{__APP_VERSION__}
-            </div>
-          </div>
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={t.collapseSidebar}
-          title={t.collapseSidebar}
-          className="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-        >
-          <PanelLeft className="w-4 h-4" />
-        </button>
-      </div>
-
-      {/* Primary New Chat CTA */}
-      <div className="px-3 pb-2.5">
-        <button
-          type="button"
-          onClick={onNewChat}
-          className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold theme-btn-primary cursor-pointer"
-        >
-          <span className="inline-flex items-center gap-2">
-            <Plus className="w-4 h-4" />
-            <span>{t.newChat}</span>
-          </span>
-          <kbd className="font-mono text-[10px] opacity-80">⌘N</kbd>
-        </button>
-      </div>
-
-      {/* Workspace Navigation */}
-      <nav className="px-2.5 space-y-0.5">
-        <button
-          type="button"
-          onClick={() => onSelectTab('chat-history')}
-          className={navBtnClass('chat-history')}
-        >
-          <span className="inline-flex items-center gap-2.5 truncate">
-            <History className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
-            <span className="truncate">{t.allConversations}</span>
-          </span>
-          <span className="font-mono tabular-nums text-[11px] text-slate-400">
-            {sessions.length}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onSelectTab('roles')}
-          className={navBtnClass('roles')}
-        >
-          <span className="inline-flex items-center gap-2.5 truncate">
-            <Sparkles className="w-4 h-4 text-violet-500 shrink-0" />
-            <span className="truncate">{t.rolesAndPersonas}</span>
-          </span>
-          <span className="text-[11px] text-slate-400 truncate max-w-[78px]">
-            {activeRole.name.split(' ')[0]}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onSelectTab('projects')}
-          className={navBtnClass('projects')}
-        >
-          <span className="inline-flex items-center gap-2.5 truncate">
-            <FolderGit2 className="w-4 h-4 text-sky-500 shrink-0" />
-            <span className="truncate">{t.projects}</span>
-          </span>
-          <span className="font-mono tabular-nums text-[11px] text-slate-400">
-            {projectsCount}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onSelectTab('knowledge')}
-          className={navBtnClass('knowledge')}
-        >
-          <span className="inline-flex items-center gap-2.5 truncate">
-            <BookOpen className="w-4 h-4 text-emerald-500 shrink-0" />
-            <span className="truncate">{t.knowledgeBase}</span>
-          </span>
-          <span className="font-mono tabular-nums text-[11px] text-emerald-600 dark:text-emerald-400">
-            {activeKnowledgeCount}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onSelectTab('plugins')}
-          className={navBtnClass('plugins')}
-        >
-          <span className="inline-flex items-center gap-2.5 truncate">
-            <Puzzle className="w-4 h-4 text-cyan-500 shrink-0" />
-            <span className="truncate">{t.pluginsTools}</span>
-          </span>
-          <span className="font-mono tabular-nums text-[11px] text-cyan-600 dark:text-cyan-400">
-            {activePluginsCount}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onOpenAdmin}
-          className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-200/45 dark:hover:bg-slate-800/55 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-        >
-          <span className="inline-flex items-center gap-2.5 truncate">
-            <Shield className="w-4 h-4 text-amber-500 shrink-0" />
-            <span className="truncate">{t.adminConsole}</span>
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onSelectTab('settings')}
-          className={navBtnClass('settings')}
-        >
-          <span className="inline-flex items-center gap-2.5 truncate">
-            <Settings className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
-            <span className="truncate">{t.settings}</span>
-          </span>
-          <kbd className="font-mono text-[10px] text-slate-400">⌘,</kbd>
-        </button>
-      </nav>
-
-      {/* Hairline divider */}
-      <div className="my-2.5 mx-3.5 border-t border-slate-200/80 dark:border-slate-800/80" />
-
-      {/* Search filter */}
-      <div className="px-3 pb-2">
-        <label className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/55 text-slate-500 dark:text-slate-400 focus-within:border-sky-500/60">
-          <Search className="w-3.5 h-3.5 shrink-0" />
-          <input
-            id="studio-sidebar-search"
-            type="search"
-            value={filterQuery}
-            onChange={(e) => setFilterQuery(e.target.value)}
-            placeholder={t.filterConversations}
-            className="w-full min-w-0 bg-transparent border-0 outline-none text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
-          />
-        </label>
-      </div>
-
-      {/* Pinned & Recent conversations */}
-      <div className="flex-1 min-h-0 overflow-y-auto studio-scroll px-2.5 pb-2 space-y-3">
-        {pinnedSessions.length > 0 && (
-          <div className="space-y-0.5">
-            <div className="px-2 py-1 flex items-center justify-between text-[11px] font-medium text-slate-500 dark:text-slate-400">
-              <span className="inline-flex items-center gap-1.5">
-                <Pin className="w-3 h-3 text-amber-500" />
-                <span>{t.pinnedChats}</span>
-              </span>
-              <span className="font-mono tabular-nums">{pinnedSessions.length}</span>
-            </div>
-            {pinnedSessions.map(renderRow)}
-          </div>
-        )}
-
-        <div className="space-y-0.5">
-          <div className="px-2 py-1 flex items-center justify-between text-[11px] font-medium text-slate-500 dark:text-slate-400">
-            <span className="inline-flex items-center gap-1.5">
-              <MessageSquare className="w-3 h-3 theme-accent-text" />
-              <span>{t.recentChats}</span>
-            </span>
-            <span className="font-mono tabular-nums">{recentSessions.length}</span>
-          </div>
-          {recentSessions.length === 0 ? (
-            <p className="px-2.5 py-3 text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-              {q ? t.noMatchingConversations : t.emptyHistory}
-            </p>
-          ) : (
-            recentSessions.map(renderRow)
-          )}
-        </div>
-      </div>
-
-      {/* Footer: Language, Theme Popover, Feedback, User Session */}
-      <div className="p-2.5 border-t border-slate-200/80 dark:border-slate-800/80 space-y-2 bg-white/35 dark:bg-slate-950/30">
-        <div className="flex items-center justify-between gap-1.5">
-          <LanguageToggle />
-          <ThemeControlPopover
-            compact
-            align="left"
-            placement="top"
-            onOpenSettings={() => onSelectTab('settings')}
-          />
+    <>
+      {/* Mobile/narrow-preview drawer backdrop */}
+      <div
+        onClick={onToggleOpen}
+        aria-hidden="true"
+        className="md:hidden fixed inset-0 z-30 bg-slate-950/45 backdrop-blur-[1px]"
+      />
+      <aside className="fixed md:static inset-y-0 left-0 z-40 md:z-auto w-64 max-w-[82vw] h-full min-h-0 border-r theme-sidebar-surface flex flex-col shrink-0 transition-all text-slate-800 dark:text-slate-200 select-none overflow-hidden shadow-2xl md:shadow-none">
+        {/* Top Studio Brand Header */}
+        <div className="px-3.5 pt-3.5 pb-1 flex items-center justify-between gap-2">
           <button
             type="button"
-            onClick={onOpenFeedback}
-            title={t.shareFeedbackBtn}
-            aria-label={t.shareFeedbackBtn}
-            className="inline-flex items-center justify-center p-1.5 rounded-lg border border-slate-200/80 dark:border-slate-700/70 bg-white/70 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
+            onClick={() => onSelectTab('chat')}
+            className="flex items-center gap-2 cursor-pointer group min-w-0"
           >
-            <MessageSquareHeart className="w-3.5 h-3.5" />
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              className="w-5 h-5 shrink-0 transition-transform group-hover:scale-105"
+            >
+              <path
+                d="M12 2C12 7.52285 16.4772 12 22 12C16.4772 12 12 16.4772 12 22C12 16.4772 7.52285 12 2 12C7.52285 12 12 7.52285 12 2Z"
+                fill="url(#sidebar-supreme-gradient)"
+              />
+              <defs>
+                <linearGradient
+                  id="sidebar-supreme-gradient"
+                  x1="2"
+                  y1="2"
+                  x2="22"
+                  y2="22"
+                  gradientUnits="userSpaceOnUse"
+                >
+                  <stop stopColor="#06B6D4" />
+                  <stop offset="0.5" stopColor="#3B82F6" />
+                  <stop offset="1" stopColor="#8B5CF6" />
+                </linearGradient>
+              </defs>
+            </svg>
+            <span className="text-sm font-semibold tracking-tight text-slate-900 dark:text-slate-100 truncate">
+              SupremeAI Studio
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggleOpen}
+            aria-label="Collapse sidebar"
+            title="Collapse sidebar"
+            className="p-1.5 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 rounded-lg hover:bg-slate-200/70 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
+          >
+            <PanelLeft className="w-4 h-4" />
           </button>
         </div>
 
-        <UserSessionPanel onSessionChange={onSessionEmailChange} />
-      </div>
-    </aside>
+        {/* Top Action: "+ New chat" */}
+        <div className="p-3 pb-2">
+          <button
+            type="button"
+            onClick={() => {
+              onNewSession();
+              onSelectTab('chat');
+            }}
+            className="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-full bg-slate-200/80 hover:bg-slate-300/80 dark:bg-slate-800 dark:hover:bg-slate-700/80 text-slate-900 dark:text-slate-100 text-xs font-medium transition-colors cursor-pointer shadow-xs"
+          >
+            <Plus className="w-4 h-4 text-slate-600 dark:text-slate-300" />
+            <span>{t.newChat}</span>
+          </button>
+        </div>
+
+        {/* Streamlined Navigation: 3 Core Items + Collapsible More Workspace */}
+        <div className="px-2 space-y-0.5 text-xs text-slate-600 dark:text-slate-400 overflow-y-auto max-h-[44vh]">
+          <button
+            type="button"
+            onClick={() => onSelectTab('chat-history')}
+            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg transition-colors cursor-pointer ${
+              activeTab === 'chat-history'
+                ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
+                : 'hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <History className="w-4 h-4 text-slate-500" />
+              <span>{t.allConversations}</span>
+            </div>
+            {isGuest ? (
+              <Lock className="w-3 h-3 text-slate-400" />
+            ) : (
+              <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                {sessions.length}
+              </span>
+            )}
+          </button>
+
+          {enableKnowledgeGrounding && (
+            <button
+              type="button"
+              onClick={() => onSelectTab('user-knowledge')}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg transition-colors cursor-pointer ${
+                activeTab === 'user-knowledge'
+                  ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
+                  : 'hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <BookOpen className="w-4 h-4 text-purple-500" />
+                <span>{t.knowledgeBase}</span>
+              </div>
+              {isGuest && <Lock className="w-3 h-3 text-slate-400" />}
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => onSelectTab('user-settings')}
+            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg transition-colors cursor-pointer ${
+              activeTab === 'user-settings'
+                ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
+                : 'hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <Settings className="w-4 h-4 text-slate-500" />
+              <span>{t.settings}</span>
+            </div>
+            {isGuest && <Lock className="w-3 h-3 text-slate-400" />}
+          </button>
+
+          {/* Collapsible secondary workspace tools to prevent option overload */}
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setMemoryTopicsCount(loadUserMemory().recentTopics.length);
+                setShowMoreWorkspace((v) => !v);
+              }}
+              className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-[11px] font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/40 hover:text-slate-800 dark:hover:text-slate-200 transition-colors cursor-pointer"
+            >
+              <span>{developerMode ? 'Workspace & Developer' : 'More Workspace'}</span>
+              {showMoreWorkspace ? (
+                <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+              ) : (
+                <ChevronRight className="w-3.5 h-3.5 shrink-0" />
+              )}
+            </button>
+
+            {showMoreWorkspace && (
+              <div className="mt-0.5 space-y-0.5 pl-2">
+                <button
+                  type="button"
+                  onClick={() => onSelectTab('user-billing')}
+                  className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                    activeTab === 'user-billing' || activeTab === 'usage'
+                      ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
+                      : 'hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <CreditCard className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>{t.planUsage}</span>
+                  </div>
+                  {isGuest && <Lock className="w-3 h-3 text-slate-400" />}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onSelectTab('user-team')}
+                  className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                    activeTab === 'user-team'
+                      ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
+                      : 'hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Users className="w-3.5 h-3.5 text-indigo-500" />
+                    <span>{t.teamMembers}</span>
+                  </div>
+                  {isGuest && <Lock className="w-3 h-3 text-slate-400" />}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onSelectTab('live-sync')}
+                  className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                    activeTab === 'live-sync'
+                      ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
+                      : 'hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Activity className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>{t.liveDataFabric}</span>
+                  </div>
+                  <span className="text-[10px] font-mono tabular-nums text-slate-400">
+                    {federationOnline}/{federationTotal}
+                  </span>
+                </button>
+
+                {developerMode && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => onSelectTab('user-projects')}
+                      className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                        activeTab === 'user-projects'
+                          ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
+                          : 'hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <FolderGit2 className="w-3.5 h-3.5 text-slate-500" />
+                        <span>{t.myProjects}</span>
+                      </div>
+                      <span className="text-[10px] font-mono tabular-nums text-slate-400">
+                        {projectsCount}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => onSelectTab('user-api-keys')}
+                      className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                        activeTab === 'user-api-keys'
+                          ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
+                          : 'hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      <Key className="w-3.5 h-3.5 text-blue-500" />
+                      <span>{t.apiKeysProviders}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => onSelectTab('user-plugins')}
+                      className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                        activeTab === 'user-plugins'
+                          ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
+                          : 'hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <Puzzle className="w-3.5 h-3.5 text-slate-500" />
+                        <span>{t.pluginsTools}</span>
+                      </div>
+                      <span className="text-[10px] font-mono tabular-nums text-slate-400">
+                        {activePluginsCount}
+                      </span>
+                    </button>
+                  </>
+                )}
+
+                <div className="flex items-center justify-between px-3 py-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                  <span className="inline-flex items-center gap-2">
+                    <Brain className="w-3.5 h-3.5 text-cyan-500" />
+                    <span>AI Memory ({memoryTopicsCount})</span>
+                  </span>
+                  {memoryTopicsCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearUserMemory();
+                        setMemoryTopicsCount(0);
+                      }}
+                      className="text-[10px] text-slate-400 hover:text-rose-500 underline cursor-pointer"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div className="my-2 mx-3 border-t border-slate-200/70 dark:border-slate-800/70" />
+
+        {/* Pinned & Recent Chats Lists */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-2 space-y-3 pb-2">
+          {pinnedSessions.length > 0 && (
+            <div className="space-y-0.5">
+              <div className="px-2 py-1 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                <span className="inline-flex items-center gap-1.5">
+                  <Pin className="w-3 h-3 text-amber-500" />
+                  <span>{t.pinnedChats}</span>
+                </span>
+                <span className="font-mono tabular-nums">{pinnedSessions.length}</span>
+              </div>
+              {pinnedSessions.map(renderSessionRow)}
+            </div>
+          )}
+
+          <div className="space-y-0.5">
+            <div className="px-2 py-1 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              <span className="inline-flex items-center gap-1.5">
+                <MessageSquare className="w-3 h-3 text-cyan-500" />
+                <span>{t.recentChats}</span>
+              </span>
+              <span className="font-mono tabular-nums">{recentSessions.length}</span>
+            </div>
+
+            {recentSessions.length === 0 ? (
+              <div className="mx-1 px-3 py-2.5 rounded-xl border border-dashed border-slate-200/90 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 text-[11px] text-slate-500 dark:text-slate-400">
+                <p className="leading-relaxed">{t.emptySidebarHint}</p>
+              </div>
+            ) : (
+              recentSessions.map(renderSessionRow)
+            )}
+          </div>
+        </div>
+
+        {/* Streamlined Profile, Theme & Ops Console Footer */}
+        <div className="p-2.5 border-t border-slate-200/80 dark:border-slate-800/80 bg-white/40 dark:bg-slate-900/40 space-y-2">
+          {isGuest ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInlineLoginOpen((v) => !v);
+                    setInlineError('');
+                  }}
+                  className="flex items-center gap-1.5 text-left min-w-0 group cursor-pointer"
+                  title={t.signInSignUp}
+                >
+                  <span className="w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 flex items-center justify-center text-[11px] font-semibold shrink-0">
+                    G
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold text-slate-800 dark:text-slate-100 truncate group-hover:text-[var(--theme-accent)] transition-colors">
+                      {t.guestPreview}
+                    </div>
+                    <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                      {inlineLoginOpen ? 'Direct Sign In' : 'Click to sign in directly'}
+                    </div>
+                  </div>
+                </button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <ThemeControlPopover
+                    compact
+                    align="left"
+                    placement="top"
+                    triggerLabel={t.themeShort}
+                    onOpenSettings={() => onSelectTab('user-settings')}
+                  />
+                  {inlineLoginOpen && (
+                    <button
+                      type="button"
+                      onClick={() => setInlineLoginOpen(false)}
+                      aria-label="Close direct sign-in"
+                      className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {inlineLoginOpen ? (
+                <form
+                  onSubmit={(e) => void handleInlineGuestLogin(e)}
+                  className="p-2 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-white/85 dark:bg-slate-950/80 space-y-1.5"
+                >
+                  <input
+                    type="email"
+                    required
+                    autoFocus
+                    autoComplete="username"
+                    value={inlineEmail}
+                    onChange={(e) => setInlineEmail(e.target.value)}
+                    placeholder="Email address"
+                    className="w-full px-2.5 py-1.5 rounded-lg text-xs border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[var(--theme-accent)]"
+                  />
+                  <input
+                    type="password"
+                    required
+                    autoComplete="current-password"
+                    value={inlinePassword}
+                    onChange={(e) => setInlinePassword(e.target.value)}
+                    placeholder="Password"
+                    className="w-full px-2.5 py-1.5 rounded-lg text-xs border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[var(--theme-accent)]"
+                  />
+                  {inlineError && (
+                    <p className="text-[10px] text-rose-500 dark:text-rose-400 px-0.5">
+                      {inlineError}
+                    </p>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full py-1.5 px-3 rounded-lg theme-btn-primary text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  >
+                    <LogIn className="w-3.5 h-3.5" />
+                    <span>{authLoading ? 'Signing in…' : 'Sign In'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onRequestAuth?.('Create an Account')}
+                    className="w-full text-center text-[10px] text-slate-500 dark:text-slate-400 hover:text-[var(--theme-accent)] pt-0.5 cursor-pointer"
+                  >
+                    Need an account? Sign Up →
+                  </button>
+                </form>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setInlineLoginOpen(true)}
+                  className="w-full py-1.5 px-3 rounded-xl theme-btn-primary text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>{t.signInSignUp}</span>
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* Slim Monthly Quota Mini-Bar */}
+              <button
+                type="button"
+                onClick={() => onSelectTab('user-billing')}
+                className="w-full text-left px-1 py-0.5 rounded-md hover:bg-slate-100/70 dark:hover:bg-slate-800/60 transition-colors cursor-pointer space-y-1"
+                title={t.planUsage}
+              >
+                <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400">
+                  <span>{t.monthlyCredits}</span>
+                  <span className="font-mono tabular-nums">
+                    {usagePercent}% {t.usedSuffix}
+                  </span>
+                </div>
+                <div className="w-full h-1 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      usagePercent > 85 ? 'bg-amber-500' : 'bg-[var(--theme-accent)]'
+                    }`}
+                    style={{ width: `${usagePercent}%` }}
+                  />
+                </div>
+              </button>
+
+              {/* Clean Profile + Theme + Sign Out (Role & Language managed in User Settings) */}
+              <div className="flex items-center justify-between gap-1.5 pt-0.5">
+                <div
+                  onClick={() => onSelectTab('user-settings')}
+                  className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer group"
+                  title={t.settings}
+                >
+                  <div className="w-7 h-7 rounded-full bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 flex items-center justify-center text-xs font-semibold shrink-0">
+                    {authUser?.avatar || authUser?.name?.charAt(0)?.toUpperCase() || 'U'}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate group-hover:text-[var(--theme-accent)] transition-colors">
+                      {authUser?.name || 'User'}
+                    </div>
+                    <div className="text-[10px] theme-accent-text font-medium truncate">
+                      {authUser?.plan || 'Pro'}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1 shrink-0">
+                  <ThemeControlPopover
+                    compact
+                    align="left"
+                    placement="top"
+                    triggerLabel={t.themeShort}
+                    onOpenSettings={() => onSelectTab('user-settings')}
+                  />
+
+                  {onSignOut && (
+                    <button
+                      type="button"
+                      onClick={onSignOut}
+                      title={t.signOutBtn}
+                      aria-label="Sign out of account"
+                      className="p-1.5 text-slate-400 hover:text-rose-500 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </aside>
+    </>
   );
-}
+};

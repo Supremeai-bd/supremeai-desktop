@@ -1,16 +1,12 @@
-import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './App';
-import { I18nProvider } from './i18n';
-import './styles.css';
+import App from './App.tsx';
+import './index.css';
+import { useAuthStore } from './stores/useAuthStore';
+import { installGlobalErrorHandlers } from './services/telemetry';
 
-const root = document.getElementById('root');
-if (!root) throw new Error('SupremeAI desktop root element is missing.');
+// Integration plan Phase 1: validate any stored session against the deployed
+// API at startup instead of trusting localStorage blindly.
+installGlobalErrorHandlers();
+useAuthStore.getState().restoreSession();
 
-createRoot(root).render(
-  <StrictMode>
-    <I18nProvider>
-      <App />
-    </I18nProvider>
-  </StrictMode>,
-);
+createRoot(document.getElementById('root')!).render(<App />);

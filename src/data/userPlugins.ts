@@ -1,4 +1,6 @@
-import type { PluginItem, PromptTemplateItem } from '../types/studio';
+import { PluginItem, UserProject, UserAccountSettings } from '../types';
+import { PLAN_CATALOG } from '../config/plans';
+import { EXTERNAL_URLS } from '../config/externalUrls';
 
 export const INITIAL_PLUGINS: PluginItem[] = [
   {
@@ -32,7 +34,7 @@ export const INITIAL_PLUGINS: PluginItem[] = [
     category: 'ai-grounding',
     isEnabled: true,
     version: '1.8.0',
-    author: 'SupremeAI Studio',
+    author: 'Google AI Studio',
   },
   {
     id: 'terminal-assistant',
@@ -69,75 +71,52 @@ export const INITIAL_PLUGINS: PluginItem[] = [
   },
 ];
 
-export const INITIAL_PROMPT_TEMPLATES: PromptTemplateItem[] = [
+export const INITIAL_USER_PROJECTS: UserProject[] = [
   {
-    id: 'tmpl_gen_01',
-    title: 'Executive Summary & Key Action Items',
-    category: 'research',
-    description:
-      'Turn long meeting notes, reports, or articles into clear takeaways and next steps.',
-    template:
-      'Summarize the key points, decisions made, and clear next action items (with owners if mentioned) from the following notes:\n\n[PASTE NOTES OR DOCUMENT HERE]',
-    tags: ['summary', 'notes', 'productivity'],
+    id: 'proj_supremeai_core',
+    name: 'supremeai',
+    repoUrl: EXTERNAL_URLS.githubBackendRepo,
+    branch: 'main',
+    description: 'Core AI engine, model orchestration, and backend agent services.',
+    language: 'TypeScript / Python',
+    stars: 28,
+    lastSynced: Date.now() - 3600000 * 4,
+    aiReviewStatus: 'reviewed',
+    buildStatus: 'passing',
+    buildUrl: `${EXTERNAL_URLS.githubBackendRepo}/actions`,
   },
   {
-    id: 'tmpl_gen_02',
-    title: 'Clear & Professional Email Polish',
-    category: 'writing',
-    description:
-      'Refine rough drafts into polite, concise, and persuasive emails or announcements.',
-    template:
-      'Rewrite the following draft to be clear, warm, and concise for a professional audience. Keep the core message intact:\n\n[PASTE DRAFT HERE]',
-    tags: ['writing', 'email', 'clarity'],
-  },
-  {
-    id: 'tmpl_gen_03',
-    title: 'Structured Brainstorm & Pros/Cons Matrix',
-    category: 'general',
-    description:
-      'Explore options for a business decision with clear trade-offs and recommendations.',
-    template:
-      'Help me evaluate options for the following decision. Provide 3 practical approaches, their pros and cons, and a recommended next step:\n\n[DESCRIBE YOUR GOAL OR DECISION HERE]',
-    tags: ['brainstorm', 'planning', 'strategy'],
-  },
-  {
-    id: 'tmpl_01',
-    title: 'Strict Security Audit & OWASP Fuzz',
-    category: 'security',
-    description:
-      'Inspect endpoints, authentication middleware, and input sanitization against Top 10 vulnerabilities.',
-    template:
-      'Perform a comprehensive security audit on the following code. Check for SQL/NoSQL injection, prototype pollution, unhandled async exceptions, and OWASP top 10 risks:\n\n```\n[PASTE CODE HERE]\n```',
-    tags: ['security', 'audit', 'owasp'],
-  },
-  {
-    id: 'tmpl_02',
-    title: 'TypeScript Interface & Type Guard Invariants',
-    category: 'code',
-    description:
-      'Generate strict non-nullable TypeScript models, schema parsers, and type predicates.',
-    template:
-      'Design clean, strict TypeScript interfaces for this data model. Include runtime assertion type guards (`isX(val: unknown): val is X`), schema validation, and proper generics:\n\n```json\n[PASTE JSON PAYLOAD HERE]\n```',
-    tags: ['typescript', 'interfaces', 'types'],
-  },
-  {
-    id: 'tmpl_03',
-    title: 'Distributed System Architectural Invariant Review',
-    category: 'architecture',
-    description:
-      'Analyze distributed microservices for split-brain risks, idempotency, and backpressure.',
-    template:
-      'Review the following microservice orchestration design. Evaluate idempotency guarantees, dead-letter fallback, retry storms, and event-driven backpressure:\n\n```\n[DESCRIBE ARCHITECTURE HERE]\n```',
-    tags: ['architecture', 'microservices', 'reliability'],
-  },
-  {
-    id: 'tmpl_04',
-    title: 'Refactor to React 19 Functional Hooks',
-    category: 'review',
-    description:
-      'Modernize legacy components into modern React 19 functional code with zero re-render bloat.',
-    template:
-      'Refactor the following React component to modern React 19 best practices. Use clean custom hooks, proper cleanup effects, memoization where needed, and eliminate redundant state:\n\n```tsx\n[PASTE COMPONENT HERE]\n```',
-    tags: ['react19', 'refactor', 'hooks'],
+    id: 'proj_supremeai_studio',
+    name: 'supremeai-studio',
+    repoUrl: EXTERNAL_URLS.githubFrontendRepo,
+    branch: 'main',
+    description: 'Ultra-lightweight SupremeAI developer studio & workspace frontend.',
+    language: 'TypeScript / React',
+    stars: 42,
+    lastSynced: Date.now() - 3600000 * 2,
+    aiReviewStatus: 'reviewed',
+    buildStatus: 'passing',
+    buildUrl: `${EXTERNAL_URLS.githubFrontendRepo}/actions`,
   },
 ];
+
+export const DEFAULT_USER_SETTINGS: UserAccountSettings = {
+  name: 'Guest User',
+  email: '',
+  role: 'user',
+  plan: 'Free',
+  monthlyTokensUsed: 0,
+  monthlyTokensLimit: PLAN_CATALOG.Free.monthlyTokensLimit,
+  emailNotifications: true,
+  autoCodeReview: true,
+  streamResponses: true,
+  defaultModel: 'supreme-core',
+  language: 'en',
+  layoutMode: 'sidebar-focus',
+  contentLayout: 'fluid',
+  developerMode: false,
+  autoModelRouting: true,
+  enableKnowledgeGrounding: true,
+  showWorkspaceTips: true,
+  customInstructions: '',
+};

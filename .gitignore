@@ -29,11 +29,11 @@ src-tauri/target/
 *.sln
 *.sw?
 
-# Android / Gradle (apps/mobile-android)
-apps/mobile-android/.gradle/
-apps/mobile-android/build/
-apps/mobile-android/app/build/
-apps/mobile-android/local.properties
-apps/mobile-android/*.keystore
-apps/mobile-android/*.jks
+# Tauri v2 Android generated project & build artifacts
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/build/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/local.properties
+src-tauri/gen/android/*.keystore
+src-tauri/gen/android/*.jks
 

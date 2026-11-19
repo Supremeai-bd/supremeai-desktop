@@ -1,5 +1,5 @@
 import { DEFAULT_GATEWAY_URL, isDesktopTauri } from '../bridge/desktopBridge';
-import type { DesktopProject, KnowledgeDoc, PluginItem, RolePersona, SavedChat } from '../types/studio';
+import type { ChatSession, KnowledgeDoc, PluginItem, RolePersona } from '../types';
 import type {
   LiveThemeId,
   MotionSpeed,
@@ -9,7 +9,14 @@ import type {
 } from '../stores/useThemeStore';
 
 export type SyncPlatform = 'web' | 'desktop' | 'android' | 'ios';
-export type SyncDomain = 'chats' | 'theme' | 'roles' | 'projects' | 'knowledge' | 'plugins' | 'voice_avatar';
+export type SyncDomain =
+  | 'chats'
+  | 'theme'
+  | 'roles'
+  | 'projects'
+  | 'knowledge'
+  | 'plugins'
+  | 'voice_avatar';
 
 export interface SyncThemePayload {
   themeMode: ThemeMode;
@@ -31,26 +38,18 @@ export interface SyncEnvelope<T = unknown> {
 }
 
 export interface SyncSnapshot {
-  chats?: { updatedAt: number; items: SavedChat[] };
+  chats?: { updatedAt: number; items: ChatSession[] };
   theme?: { updatedAt: number; data: SyncThemePayload };
   roles?: { updatedAt: number; items: RolePersona[] };
-  projects?: { updatedAt: number; items: DesktopProject[] };
+  projects?: { updatedAt: number; items: unknown[] };
   knowledge?: { updatedAt: number; items: KnowledgeDoc[] };
   plugins?: { updatedAt: number; items: PluginItem[] };
-}
-
-export interface SyncSettings {
-  enabled: boolean;
-  lastSyncedAt: number | null;
-  deviceId: string;
-  platform: SyncPlatform;
 }
 
 const SYNC_CHANNEL_NAME = 'supremeai.realtime.sync.v1';
 const SYNC_DEVICE_ID_KEY = 'supremeai.sync.device_id.v1';
 const SYNC_ENABLED_KEY = 'supremeai.sync.enabled.v1';
 const SYNC_LAST_AT_KEY = 'supremeai.sync.last_at.v1';
-const WEB_USER_SESSION_KEY = 'supremeai.desktop.web_user.v1';
 
 let revisionCounter = 0;
 
@@ -86,7 +85,7 @@ export function saveSyncEnabled(enabled: boolean): void {
   try {
     localStorage.setItem(SYNC_ENABLED_KEY, enabled ? 'true' : 'false');
   } catch {
-    // Ignore storage failure
+    // Ignore storage errors
   }
 }
 
@@ -111,10 +110,7 @@ function recordLastSyncedAt(ts: number): void {
 
 function getAuthToken(): string | null {
   try {
-    const raw = localStorage.getItem(WEB_USER_SESSION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { token?: string; access_token?: string };
-    return parsed.token || parsed.access_token || null;
+    return localStorage.getItem('supremeai_access_token');
   } catch {
     return null;
   }
@@ -128,12 +124,8 @@ function getGatewayBaseUrl(): string {
   return (fromEnv || DEFAULT_GATEWAY_URL).replace(/\/+$/, '');
 }
 
-/**
- * Deterministic Last-Write-Wins merge for conversation lists across devices.
- * Preserves conversations from all platforms and keeps the freshest message list per ID.
- */
-export function mergeSyncedChats(local: SavedChat[], remote: SavedChat[]): SavedChat[] {
-  const map = new Map<string, SavedChat>();
+export function mergeSyncedSessions(local: ChatSession[], remote: ChatSession[]): ChatSession[] {
+  const map = new Map<string, ChatSession>();
   for (const chat of local) {
     map.set(chat.id, chat);
   }
@@ -151,10 +143,8 @@ export function mergeSyncedChats(local: SavedChat[], remote: SavedChat[]): Saved
 }
 
 /**
- * Cross-device real-time sync coordinator:
- * 1) Instant multi-window / Web-Desktop-tab sync via BroadcastChannel
- * 2) Authenticated cloud sync via SupremeAI Gateway SSE (/api/v1/sync/stream) & REST (/api/v1/sync/state)
- *    using the exact same SyncEnvelope schema implemented in apps/mobile-android/RealtimeSyncEngine.kt
+ * Cross-device Real-Time Sync client matching packages/contracts/sync-protocol.json
+ * and apps/mobile-android/app/src/main/java/com/example/data/RealtimeSyncEngine.kt
  */
 export class RealtimeSyncClient {
   private channel: BroadcastChannel | null = null;
@@ -189,7 +179,6 @@ export class RealtimeSyncClient {
       };
     }
 
-    // Start cloud SSE listener when user is authenticated
     const token = getAuthToken();
     if (token) {
       void this.pullCloudSnapshot(token);
@@ -223,7 +212,7 @@ export class RealtimeSyncClient {
     try {
       this.channel?.postMessage(envelope);
     } catch {
-      // BroadcastChannel closed or unavailable
+      // Ignore closed channel
     }
 
     recordLastSyncedAt(now);
@@ -232,31 +221,6 @@ export class RealtimeSyncClient {
     const token = getAuthToken();
     if (token) {
       void this.pushCloudEnvelope(token, envelope);
-    }
-  }
-
-  async syncNow(snapshot: SyncSnapshot): Promise<boolean> {
-    const now = Date.now();
-    if (snapshot.chats) this.publish('chats', snapshot.chats.items);
-    if (snapshot.theme) this.publish('theme', snapshot.theme.data);
-    if (snapshot.roles) this.publish('roles', snapshot.roles.items);
-    if (snapshot.knowledge) this.publish('knowledge', snapshot.knowledge.items);
-    if (snapshot.plugins) this.publish('plugins', snapshot.plugins.items);
-
-    const token = getAuthToken();
-    if (!token) {
-      recordLastSyncedAt(now);
-      this.onSyncActivity?.(now);
-      return true;
-    }
-
-    try {
-      const pulled = await this.pullCloudSnapshot(token);
-      recordLastSyncedAt(now);
-      this.onSyncActivity?.(now);
-      return pulled;
-    } catch {
-      return false;
     }
   }
 
@@ -273,7 +237,7 @@ export class RealtimeSyncClient {
         body: JSON.stringify(envelope),
       });
     } catch {
-      // Local-first: silently remain functional offline until gateway sync route is reachable
+      // Local-first fallback
     }
   }
 
@@ -355,12 +319,12 @@ export class RealtimeSyncClient {
               this.onSyncActivity?.(now);
             }
           } catch {
-            // Ignore malformed keepalive ping
+            // Ignore keepalive frames
           }
         }
       }
     } catch {
-      // Offline or stream endpoint not yet active on backend — local-first mode continues uninterrupted
+      // Offline resilient
     }
   }
 }

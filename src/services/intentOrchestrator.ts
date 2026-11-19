@@ -1,0 +1,608 @@
+import type { ChatAttachment, ChatMessage, KnowledgeDoc, WorkbenchThinkingLevel } from '../types';
+import { parseSmartIntent, type SmartIntentResult } from '../utils/chatAutoIntent';
+
+export type IntentPrimaryGoal =
+  | 'chat'
+  | 'build_app'
+  | 'deep_research'
+  | 'live_web'
+  | 'file_analysis'
+  | 'schedule_task'
+  | 'dashboard_action';
+
+export type AutoDockTab = 'none' | 'preview' | 'code' | 'browser' | 'schedule';
+
+export type DashboardActionType =
+  | 'none'
+  | 'toggle_dark_mode'
+  | 'toggle_light_mode'
+  | 'open_usage'
+  | 'open_settings'
+  | 'open_knowledge'
+  | 'open_history'
+  | 'open_admin_health'
+  | 'open_admin_ai'
+  | 'open_admin_security'
+  | 'open_admin_releases'
+  | 'toggle_voice';
+
+export interface PendingClarification {
+  id: string;
+  originalPrompt: string;
+  question: string;
+  options: string[];
+  language: 'en' | 'bn' | 'banglish';
+  attachment?: ChatAttachment;
+  attachments?: ChatAttachment[];
+}
+
+export interface IntentOrchestrationResult extends SmartIntentResult {
+  primaryGoal: IntentPrimaryGoal;
+  autoOpenDockTab: AutoDockTab;
+  dashboardAction: DashboardActionType;
+  needsClarification: boolean;
+  clarificationQuestion?: string;
+  clarificationOptions?: string[];
+  planSummary: string;
+  inferredLanguage: 'en' | 'bn' | 'banglish';
+  inferredTopic?: string;
+  source: 'gemini' | 'heuristic';
+}
+
+export interface UserMemoryProfile {
+  preferredLanguage: 'en' | 'bn' | 'banglish';
+  recentTopics: string[];
+  interactionCount: number;
+  updatedAt: number;
+}
+
+const USER_MEMORY_STORAGE_KEY = 'supremeai_user_memory_v1';
+
+const BANGLISH_PATTERNS =
+  /\b(ami|amar|amader|tumi|tomar|ekta|akta|koro|korbo|korte|lagbe|chai|chao|banao|banabo|dekhao|bolo|thik|kivabe|keno|ajker|dokan|hisab|kaj|shuru|chalu|bondho)\b/i;
+
+const BENGALI_SCRIPT_REGEX = /[\u0980-\u09FF]/;
+
+const BANGLISH_BUILD_PATTERNS =
+  /\b(app|website|site|dashboard|hisab|shop|dokan|store|portfolio|landing\s*page|software|tool|system|calculator|form|page|bot)\b.*\b(banao|banabo|banai|lagbe|chai|create|build|make|design)\b|\b(banao|banabo|create|build|make|design)\b.*\b(app|website|site|dashboard|hisab|shop|dokan|store|portfolio|software|tool|system)\b/i;
+
+const BANGLISH_WEB_PATTERNS =
+  /\b(ajker|ekhonkar|latest|today|khobor|news|dam|price|weather|abohawa|score|stock|dollar\s*rate|gold\s*price|search\s*koro|khuje\s*dao)\b/i;
+
+const BANGLISH_SCHEDULE_PATTERNS =
+  /\b(protidin|everyday|every\s*day|daily|weekly|remind\s*me|reminder|schedule|shokal|ratre|sokal)\b/i;
+
+export function detectPromptLanguage(text: string): 'en' | 'bn' | 'banglish' {
+  if (BENGALI_SCRIPT_REGEX.test(text)) return 'bn';
+  if (BANGLISH_PATTERNS.test(text)) return 'banglish';
+  return 'en';
+}
+
+export function loadUserMemory(): UserMemoryProfile {
+  if (typeof localStorage === 'undefined') {
+    return { preferredLanguage: 'en', recentTopics: [], interactionCount: 0, updatedAt: Date.now() };
+  }
+  try {
+    const raw = localStorage.getItem(USER_MEMORY_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<UserMemoryProfile>;
+      return {
+        preferredLanguage:
+          parsed.preferredLanguage === 'bn' || parsed.preferredLanguage === 'banglish'
+            ? parsed.preferredLanguage
+            : 'en',
+        recentTopics: Array.isArray(parsed.recentTopics)
+          ? parsed.recentTopics.filter((t): t is string => typeof t === 'string').slice(0, 6)
+          : [],
+        interactionCount: typeof parsed.interactionCount === 'number' ? parsed.interactionCount : 0,
+        updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
+      };
+    }
+  } catch {
+    // Ignore storage read issues
+  }
+  return { preferredLanguage: 'en', recentTopics: [], interactionCount: 0, updatedAt: Date.now() };
+}
+
+export function recordUserMemory(update: {
+  language?: 'en' | 'bn' | 'banglish';
+  topic?: string;
+}): UserMemoryProfile {
+  const current = loadUserMemory();
+  const nextTopics = [...current.recentTopics];
+  const cleanTopic = update.topic?.trim().slice(0, 48);
+  if (cleanTopic && cleanTopic.length >= 3) {
+    const filtered = nextTopics.filter((t) => t.toLowerCase() !== cleanTopic.toLowerCase());
+    filtered.unshift(cleanTopic);
+    nextTopics.splice(0, nextTopics.length, ...filtered.slice(0, 6));
+  }
+
+  const next: UserMemoryProfile = {
+    preferredLanguage: update.language || current.preferredLanguage,
+    recentTopics: nextTopics,
+    interactionCount: current.interactionCount + 1,
+    updatedAt: Date.now(),
+  };
+
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(USER_MEMORY_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Ignore quota issues
+    }
+  }
+  return next;
+}
+
+export function clearUserMemory(): void {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.removeItem(USER_MEMORY_STORAGE_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+  }
+}
+
+export function buildMemoryContextPrompt(memory: UserMemoryProfile): string {
+  if (memory.interactionCount === 0 && memory.recentTopics.length === 0) return '';
+  const langNote =
+    memory.preferredLanguage === 'bn'
+      ? 'User frequently communicates in Bengali (বাংলা); mirror their language naturally.'
+      : memory.preferredLanguage === 'banglish'
+        ? 'User often writes in Banglish (Bengali in Latin script); respond clearly in natural Bengali or Banglish matching their tone.'
+        : 'User prefers clear, concise English responses.';
+  const topicsNote =
+    memory.recentTopics.length > 0
+      ? `Recent user focus areas: ${memory.recentTopics.join(', ')}.`
+      : '';
+  return `\n[USER MEMORY CONTEXT]\n${langNote}${topicsNote ? `\n${topicsNote}` : ''}`;
+}
+
+export function detectDirectDashboardAction(
+  promptText: string,
+  isAdmin: boolean
+): DashboardActionType {
+  const t = promptText.trim().toLowerCase();
+  if (!t || t.length > 110) return 'none';
+
+  // Theme switches
+  if (
+    /\b(dark\s*mode|dark\s*theme)\b/i.test(t) ||
+    /(ডার্ক\s*(মোড|থিম)|dark\s*(koro|kor|on|enable))/i.test(promptText)
+  ) {
+    if (!/\b(build|create|code|css|tailwind|component|app)\b/i.test(t)) {
+      return 'toggle_dark_mode';
+    }
+  }
+  if (
+    /\b(light\s*mode|light\s*theme)\b/i.test(t) ||
+    /(লাইট\s*(মোড|থিম)|light\s*(koro|kor|on|enable))/i.test(promptText)
+  ) {
+    if (!/\b(build|create|code|css|tailwind|component|app)\b/i.test(t)) {
+      return 'toggle_light_mode';
+    }
+  }
+
+  // Voice mode
+  if (
+    /\b(open|start|enable|turn\s*on|toggle)\s+(live\s+)?voice(\s+mode)?\b/i.test(t) ||
+    /(ভয়েস\s*(মোড\s*)?(চালু|অন)|voice\s*(mode\s*)?(on|chalu))/i.test(promptText)
+  ) {
+    return 'toggle_voice';
+  }
+
+  // User workspace navigation
+  if (
+    /\b(show|open|check|view)\s+(my\s+)?(usage|billing|plan|tokens?|quota)\b/i.test(t) ||
+    /(ইউসেজ|বিলিং|প্ল্যান|usage\s*dekhao)/i.test(promptText)
+  ) {
+    return 'open_usage';
+  }
+  if (
+    /\b(open|show|go\s+to)\s+(my\s+)?settings\b/i.test(t) ||
+    /(সেটিংস\s*(খোলো|দেখাও)|settings\s*(open|dekhao))/i.test(promptText)
+  ) {
+    return 'open_settings';
+  }
+  if (
+    /\b(open|show|manage)\s+(my\s+)?(knowledge\s*base|uploaded\s*files?|rag\s*docs?)\b/i.test(t) ||
+    /(নলেজ\s*বেস|আমার\s*ফাইল\s*দেখাও)/i.test(promptText)
+  ) {
+    return 'open_knowledge';
+  }
+  if (
+    /\b(open|show)\s+(all\s+)?(chat\s+)?history\b/i.test(t) ||
+    /(সব\s*চ্যাট|চ্যাট\s*হিস্ট্রি\s*দেখাও)/i.test(promptText)
+  ) {
+    return 'open_history';
+  }
+
+  // Admin Ops navigation via natural language
+  if (isAdmin) {
+    if (
+      /\b(check|show|open)\s+(server|system|live|cpu|latency)?\s*(health|status|ops|nodes|alerts?)\b/i.test(
+        t
+      ) ||
+      /(সার্ভার\s*(হেলথ|স্ট্যাটাস)|health\s*(check|dekhao))/i.test(promptText)
+    ) {
+      return 'open_admin_health';
+    }
+    if (
+      /\b(open|show|check)\s+(llm\s*gateway|gpu\s*fleet|ai\s*compute|models?\s*matrix)\b/i.test(t)
+    ) {
+      return 'open_admin_ai';
+    }
+    if (
+      /\b(open|show|check)\s+(customers?|security|audit\s*log|hitl)\b/i.test(t)
+    ) {
+      return 'open_admin_security';
+    }
+    if (
+      /\b(open|show|check)\s+(github\s*pipeline|release\s*gate|releases?|ci\/cd|schema\s*parity)\b/i.test(
+        t
+      )
+    ) {
+      return 'open_admin_releases';
+    }
+  }
+
+  return 'none';
+}
+
+function buildHeuristicClarification(
+  promptText: string,
+  lang: 'en' | 'bn' | 'banglish',
+  hasAttachment: boolean,
+  hasConversationHistory: boolean
+): { question: string; options: string[] } | null {
+  if (hasAttachment || hasConversationHistory) return null;
+  const trimmed = promptText.trim();
+  const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+  // Only clarify genuinely short & underspecified broad creation requests (<= 6 words)
+  if (wordCount > 6) return null;
+
+  const isVagueWebsite =
+    /^(build|create|make|design)\s+(me\s+)?(a\s+|an\s+)?(website|web\s*app|landing\s*page|site)\.?$/i.test(
+      trimmed
+    ) ||
+    /^(একটা\s*)?(ওয়েবসাইট|সাইট|ল্যান্ডিং\s*পেজ)\s*(বানাও|তৈরি\s*করো|দাও)\.?$/i.test(trimmed) ||
+    /^(ekta|akta)\s+(website|site|web\s*app)\s+(banao|banabo|lagbe|dao)\.?$/i.test(trimmed);
+
+  if (isVagueWebsite) {
+    if (lang === 'bn') {
+      return {
+        question: 'কোন ধরনের ওয়েবসাইট বানাতে চান?',
+        options: [
+          'ব্যবসা বা অনলাইন শপ (E-commerce)',
+          'পার্সোনাল পোর্টফোলিও সাইট',
+          'সার্ভিস বা এজেন্সি ল্যান্ডিং পেজ',
+          'ড্যাশবোর্ড / ম্যানেজমেন্ট ওয়েব অ্যাপ',
+        ],
+      };
+    }
+    if (lang === 'banglish') {
+      return {
+        question: 'Kon dhoroner website banate chan?',
+        options: [
+          'Online shop / E-commerce site',
+          'Personal portfolio website',
+          'Business / Agency landing page',
+          'Dashboard / Management web app',
+        ],
+      };
+    }
+    return {
+      question: 'What type of website would you like to build?',
+      options: [
+        'Online store / E-commerce',
+        'Personal portfolio',
+        'Business or SaaS landing page',
+        'Interactive management dashboard',
+      ],
+    };
+  }
+
+  const isVagueApp =
+    /^(build|create|make|design)\s+(me\s+)?(a\s+|an\s+)?(app|application|dashboard|project|software)\.?$/i.test(
+      trimmed
+    ) ||
+    /^(একটা\s*)?(অ্যাপ|ড্যাশবোর্ড|প্রজেক্ট|সফটওয়্যার)\s*(বানাও|তৈরি\s*করো|দাও)\.?$/i.test(trimmed) ||
+    /^(ekta|akta)\s+(app|dashboard|project|software)\s+(banao|banabo|lagbe|dao)\.?$/i.test(trimmed);
+
+  if (isVagueApp) {
+    if (lang === 'bn') {
+      return {
+        question: 'এই অ্যাপটির মূল কাজ কী হবে?',
+        options: [
+          'দোকান / ব্যবসার হিসাব ও ইনভয়েস',
+          'দৈনন্দিন টাস্ক ও নোট ম্যানেজার',
+          'বিজনেস অ্যানালিটিক্স ড্যাশবোর্ড',
+          'বুকিং বা কাস্টমার ম্যানেজমেন্ট',
+        ],
+      };
+    }
+    if (lang === 'banglish') {
+      return {
+        question: 'App-tir mul kaj ki hobe?',
+        options: [
+          'Dokan / Business hisab & invoice',
+          'Daily task & note manager',
+          'Analytics & sales dashboard',
+          'Booking / Customer tracker',
+        ],
+      };
+    }
+    return {
+      question: 'What should this app focus on?',
+      options: [
+        'Business inventory & invoicing',
+        'Personal tasks & notes tracker',
+        'Sales & analytics dashboard',
+        'Client booking & CRM tool',
+      ],
+    };
+  }
+
+  return null;
+}
+
+function buildPlanSummary(params: {
+  primaryGoal: IntentPrimaryGoal;
+  enableSearchGrounding: boolean;
+  enableRag: boolean;
+  thinkingLevel: WorkbenchThinkingLevel;
+  autoOpenDockTab: AutoDockTab;
+  lang: 'en' | 'bn' | 'banglish';
+}): string {
+  const parts: string[] = [];
+  const bn = params.lang === 'bn';
+
+  if (params.primaryGoal === 'build_app') {
+    parts.push(bn ? 'অ্যাপ ও কোড বিল্ডার' : 'App & Code Builder');
+  } else if (params.primaryGoal === 'deep_research') {
+    parts.push(bn ? 'গভীর রিসার্চ' : 'Deep Research');
+  } else if (params.primaryGoal === 'live_web' || params.enableSearchGrounding) {
+    parts.push(bn ? 'লাইভ ওয়েব সার্চ' : 'Live Web Search');
+  } else if (params.primaryGoal === 'file_analysis') {
+    parts.push(bn ? 'ফাইল ও ইমেজ বিশ্লেষণ' : 'File & Vision Analysis');
+  } else if (params.primaryGoal === 'schedule_task') {
+    parts.push(bn ? 'অটো শিডিউলার' : 'Smart Scheduler');
+  } else {
+    parts.push(bn ? 'স্মার্ট অ্যাসিস্ট্যান্ট' : 'Smart Assistant');
+  }
+
+  if (params.enableRag) {
+    parts.push(bn ? 'নলেজ বেস যুক্ত' : 'Knowledge Grounded');
+  }
+  if (params.autoOpenDockTab === 'preview') {
+    parts.push(bn ? 'লাইভ প্রিভিউ' : 'Live Preview');
+  } else if (params.autoOpenDockTab === 'browser') {
+    parts.push(bn ? 'লাইভ ব্রাউজার' : 'Live Browser');
+  }
+  if (params.thinkingLevel === 'XHIGH' || params.thinkingLevel === 'HIGH') {
+    parts.push(bn ? 'গভীর বিশ্লেষণ' : 'Deep Reasoning');
+  } else if (params.thinkingLevel === 'LOW') {
+    parts.push(bn ? 'দ্রুত উত্তর' : 'Fast Response');
+  }
+
+  return parts.slice(0, 3).join(' · ');
+}
+
+export async function orchestrateUserIntent(params: {
+  promptText: string;
+  attachment?: ChatAttachment;
+  knowledgeDocs?: KnowledgeDoc[];
+  recentMessages?: ChatMessage[];
+  isAdmin?: boolean;
+  skipClarification?: boolean;
+}): Promise<IntentOrchestrationResult> {
+  const {
+    promptText,
+    attachment,
+    knowledgeDocs = [],
+    recentMessages = [],
+    isAdmin = false,
+    skipClarification = false,
+  } = params;
+
+  const trimmed = promptText.trim();
+  const inferredLanguage = detectPromptLanguage(trimmed);
+  const base = parseSmartIntent({
+    promptText: trimmed,
+    attachment,
+    knowledgeDocs,
+    enableKnowledgeGroundingPref: true,
+  });
+
+  // 1. Direct instant check for Chat-Driven Dashboard Actions (0ms latency)
+  const directAction = !attachment ? detectDirectDashboardAction(trimmed, isAdmin) : 'none';
+  if (directAction !== 'none') {
+    return {
+      ...base,
+      primaryGoal: 'dashboard_action',
+      autoOpenDockTab: 'none',
+      dashboardAction: directAction,
+      needsClarification: false,
+      planSummary: inferredLanguage === 'bn' ? 'ড্যাশবোর্ড অ্যাকশন' : 'Workspace Action',
+      inferredLanguage,
+      source: 'heuristic',
+    };
+  }
+
+  // 2. Enhanced Banglish / Bilingual local heuristics
+  const isBanglishBuild = BANGLISH_BUILD_PATTERNS.test(trimmed);
+  const isBanglishWeb = BANGLISH_WEB_PATTERNS.test(trimmed);
+  const isBanglishSchedule = BANGLISH_SCHEDULE_PATTERNS.test(trimmed);
+
+  const enableProjectBuilder = base.enableProjectBuilder || isBanglishBuild;
+  const enableLiveArtifactSync = base.enableLiveArtifactSync || isBanglishBuild;
+  const enableSearchGrounding =
+    (base.enableSearchGrounding || isBanglishWeb) && !base.enableJsonOutput && !base.enableDeepResearch;
+
+  let primaryGoal: IntentPrimaryGoal = 'chat';
+  let autoOpenDockTab: AutoDockTab = 'none';
+  if (attachment) {
+    primaryGoal = enableProjectBuilder ? 'build_app' : 'file_analysis';
+    if (enableProjectBuilder) autoOpenDockTab = 'preview';
+  } else if (base.enableDeepResearch) {
+    primaryGoal = 'deep_research';
+  } else if (enableProjectBuilder) {
+    primaryGoal = 'build_app';
+    autoOpenDockTab = 'preview';
+  } else if (isBanglishSchedule) {
+    primaryGoal = 'schedule_task';
+    autoOpenDockTab = 'schedule';
+  } else if (enableSearchGrounding) {
+    primaryGoal = 'live_web';
+  } else if (base.enableLiveArtifactSync) {
+    primaryGoal = 'build_app';
+    autoOpenDockTab = 'code';
+  }
+
+  const heuristicClarification = !skipClarification
+    ? buildHeuristicClarification(
+        trimmed,
+        inferredLanguage,
+        Boolean(attachment),
+        recentMessages.length > 0
+      )
+    : null;
+
+  let result: IntentOrchestrationResult = {
+    ...base,
+    enableProjectBuilder,
+    enableLiveArtifactSync,
+    enableSearchGrounding,
+    recommendedModelId:
+      enableProjectBuilder && base.recommendedModelId === 'supreme-spark'
+        ? 'supreme-deep'
+        : enableSearchGrounding && base.recommendedModelId === 'supreme-spark'
+          ? 'supremeai-web'
+          : base.recommendedModelId,
+    recommendedThinkingLevel:
+      enableProjectBuilder && base.recommendedThinkingLevel === 'LOW'
+        ? 'HIGH'
+        : base.recommendedThinkingLevel,
+    primaryGoal,
+    autoOpenDockTab,
+    dashboardAction: 'none',
+    needsClarification: Boolean(heuristicClarification),
+    clarificationQuestion: heuristicClarification?.question,
+    clarificationOptions: heuristicClarification?.options,
+    planSummary: buildPlanSummary({
+      primaryGoal,
+      enableSearchGrounding,
+      enableRag: base.enableRag,
+      thinkingLevel:
+        enableProjectBuilder && base.recommendedThinkingLevel === 'LOW'
+          ? 'HIGH'
+          : base.recommendedThinkingLevel,
+      autoOpenDockTab,
+      lang: inferredLanguage,
+    }),
+    inferredLanguage,
+    source: 'heuristic',
+  };
+
+  // 3. Fast server-side Semantic Intent Orchestrator call (2.2s timeout, never blocks chat)
+  if (typeof fetch !== 'undefined' && trimmed.length >= 6 && !heuristicClarification) {
+    try {
+      const memory = loadUserMemory();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2200);
+      const res = await fetch('/api/intent/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          prompt: trimmed,
+          hasAttachment: Boolean(attachment),
+          isAdmin,
+          memorySummary: buildMemoryContextPrompt(memory),
+          recentTurns: recentMessages.slice(-4).map((m) => ({
+            role: m.role,
+            content: m.content.slice(0, 200),
+          })),
+        }),
+      });
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        const data = (await res.json()) as {
+          source?: 'gemini' | 'heuristic';
+          intent?: Partial<{
+            primaryGoal: IntentPrimaryGoal;
+            recommendedModelId: string;
+            recommendedThinkingLevel: WorkbenchThinkingLevel;
+            enableSearchGrounding: boolean;
+            enableDeepResearch: boolean;
+            enableProjectBuilder: boolean;
+            autoOpenDockTab: AutoDockTab;
+            dashboardAction: DashboardActionType;
+            needsClarification: boolean;
+            clarificationQuestion: string;
+            clarificationOptions: string[];
+            planSummary: string;
+            inferredLanguage: 'en' | 'bn' | 'banglish';
+            inferredTopic: string;
+          }>;
+        };
+
+        if (data.source === 'gemini' && data.intent) {
+          const ai = data.intent;
+          const allowClarify =
+            !skipClarification &&
+            !attachment &&
+            recentMessages.length === 0 &&
+            Boolean(ai.needsClarification) &&
+            Boolean(ai.clarificationQuestion?.trim()) &&
+            Array.isArray(ai.clarificationOptions) &&
+            ai.clarificationOptions.length >= 2;
+
+          result = {
+            ...result,
+            primaryGoal: ai.primaryGoal || result.primaryGoal,
+            recommendedModelId: ai.recommendedModelId || result.recommendedModelId,
+            recommendedThinkingLevel:
+              ai.recommendedThinkingLevel || result.recommendedThinkingLevel,
+            enableSearchGrounding:
+              typeof ai.enableSearchGrounding === 'boolean'
+                ? ai.enableSearchGrounding
+                : result.enableSearchGrounding,
+            enableDeepResearch:
+              typeof ai.enableDeepResearch === 'boolean'
+                ? ai.enableDeepResearch
+                : result.enableDeepResearch,
+            enableProjectBuilder:
+              typeof ai.enableProjectBuilder === 'boolean'
+                ? ai.enableProjectBuilder
+                : result.enableProjectBuilder,
+            enableLiveArtifactSync:
+              result.enableLiveArtifactSync || Boolean(ai.enableProjectBuilder),
+            autoOpenDockTab: ai.autoOpenDockTab || result.autoOpenDockTab,
+            dashboardAction: ai.dashboardAction || 'none',
+            needsClarification: allowClarify,
+            clarificationQuestion: allowClarify ? ai.clarificationQuestion?.trim() : undefined,
+            clarificationOptions: allowClarify
+              ? ai.clarificationOptions?.slice(0, 4)
+              : undefined,
+            planSummary: ai.planSummary?.trim() || result.planSummary,
+            inferredLanguage: ai.inferredLanguage || result.inferredLanguage,
+            inferredTopic: ai.inferredTopic?.trim(),
+            source: 'gemini',
+          };
+        }
+      }
+    } catch {
+      // Fall back cleanly to instant bilingual heuristics
+    }
+  }
+
+  recordUserMemory({
+    language: result.inferredLanguage,
+    topic: result.inferredTopic,
+  });
+
+  return result;
+}

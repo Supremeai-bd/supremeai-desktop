@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "SupremeAI Desktop",
-  "version": "0.1.0",
+  "version": "2.5.0",
   "identifier": "com.supremeai.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:3000",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run build:app"
   },
   "app": {
     "windows": [
@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https:; img-src 'self' data: blob:; font-src 'self' https://fonts.gstatic.com data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; frame-src 'self' blob: data:"
+      "csp": "default-src 'self' https://tauri.localhost http://tauri.localhost; connect-src 'self' ipc: http://ipc.localhost https://tauri.localhost http://tauri.localhost https: wss:; img-src 'self' data: blob: https:; font-src 'self' https://fonts.gstatic.com data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; frame-src 'self' blob: data:"
     }
   },
   "plugins": {
@@ -34,7 +34,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": [
+      "nsis",
+      "msi"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -50,6 +53,9 @@
       "wix": {
         "language": "en-US"
       }
+    },
+    "android": {
+      "minSdkVersion": 26
     }
   }
 }

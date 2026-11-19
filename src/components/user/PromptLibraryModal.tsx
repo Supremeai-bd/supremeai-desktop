@@ -11,9 +11,9 @@ import {
   Trash2,
   Tag,
 } from 'lucide-react';
-import type { PromptTemplateItem } from '../../types/studio';
-import { INITIAL_PROMPT_TEMPLATES } from '../../data/userPlugins';
-import { useI18n } from '../../i18n';
+import { PromptTemplateItem } from '../../types';
+import { INITIAL_PROMPT_TEMPLATES } from '../../data/customerWorkspaceData';
+import { useI18n } from '../../utils/i18n';
 
 interface PromptLibraryModalProps {
   isOpen: boolean;
