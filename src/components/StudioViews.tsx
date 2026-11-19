@@ -1,5 +1,6 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import {
+  AudioLines,
   BookOpen,
   Check,
   Code2,
@@ -11,14 +12,35 @@ import {
   Moon,
   Pin,
   Plus,
+  RefreshCw,
   Search,
   Sparkles,
   Square,
   Sun,
   Trash2,
+  Upload,
   Volume2,
 } from 'lucide-react';
-import { LIVE_THEMES } from '../data/studioData';
+import {
+  LIVE_THEMES,
+  useThemeStore,
+  type MotionSpeed,
+  type ScrimIntensity,
+  type SurfaceTone,
+  type ThemeMode,
+} from '../stores/useThemeStore';
+import { LiveVoiceAvatarCanvas } from '../companion/LiveVoiceAvatarCanvas';
+import {
+  AVATAR_PRESETS,
+  VOICE_AVATAR_SYNC_EVENT,
+  loadAvatarPreference,
+  processCustomFaceUpload,
+  resolveAvatarSource,
+  saveAvatarPreference,
+  saveVoicePreference,
+  type AvatarPreference,
+  type AvatarPresetId,
+} from '../companion/hologramAvatar';
 import { MAX_SPEED, MIN_SPEED } from '../companion/ttsService';
 import type { VoicePersona } from '../companion/speechUtils';
 import { useSpeech } from '../hooks/useSpeech';
@@ -26,11 +48,8 @@ import { APP_LANGUAGE_OPTIONS, dateLocale, format, useI18n } from '../i18n';
 import type {
   DesktopProject,
   KnowledgeDoc,
-  LiveThemeId,
   RolePersona,
   SavedChat,
-  ThemeConfig,
-  ThemeMode,
 } from '../types/studio';
 
 /* ================= ALL CONVERSATIONS ================= */
@@ -227,7 +246,7 @@ export function RolesView({
       category: 'Custom',
       tagline: tagline.trim() || 'Custom desktop workflow persona',
       description: tagline.trim() || instruction.trim().slice(0, 120),
-      suggestedModel: 'auto',
+      suggestedModel: 'supreme-core',
       systemInstruction: instruction.trim(),
       quickPrompts: [
         `Help me get started using the ${name.trim()} workflow.`,
@@ -704,20 +723,96 @@ export function KnowledgeView({
 /* ================= FULL-PAGE SETTINGS ================= */
 
 export function SettingsView({
-  themeConfig,
-  onModeChange,
-  onLiveThemeChange,
-  onLiveMotionChange,
+  onOpenCompanion,
   runtimeLabel,
+  syncEnabled,
+  lastSyncedAt,
+  onToggleSync,
+  onSyncNow,
 }: {
-  themeConfig: ThemeConfig;
-  onModeChange: (mode: ThemeMode) => void;
-  onLiveThemeChange: (id: LiveThemeId) => void;
-  onLiveMotionChange: (enabled: boolean) => void;
+  onOpenCompanion: () => void;
   runtimeLabel: string;
+  syncEnabled: boolean;
+  lastSyncedAt: number | null;
+  onToggleSync: (enabled: boolean) => void;
+  onSyncNow: () => Promise<void>;
 }) {
   const { lang, setLang, t } = useI18n();
+  const [syncingNow, setSyncingNow] = useState(false);
+  const {
+    themeMode,
+    resolvedScheme,
+    liveTheme,
+    liveMotion,
+    motionSpeed,
+    surfaceTone,
+    scrimIntensity,
+    setThemeMode,
+    setLiveTheme,
+    setLiveMotion,
+    setMotionSpeed,
+    setSurfaceTone,
+    setScrimIntensity,
+  } = useThemeStore();
   const { config: voice, updateConfig, speak, stop: stopSpeaking, speaking } = useSpeech();
+  const [avatarPref, setAvatarPref] = useState<AvatarPreference>(() => loadAvatarPreference());
+  const [avatarUploadError, setAvatarUploadError] = useState<string | null>(null);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarFileInputRef = useRef<HTMLInputElement>(null);
+  const previewLevelsRef = useRef<{ input: number; output: number }>({ input: 0, output: 0 });
+  const activeAvatarSource = resolveAvatarSource(avatarPref);
+
+  useEffect(() => {
+    const onSync = () => setAvatarPref(loadAvatarPreference());
+    window.addEventListener(VOICE_AVATAR_SYNC_EVENT, onSync);
+    return () => window.removeEventListener(VOICE_AVATAR_SYNC_EVENT, onSync);
+  }, []);
+
+  useEffect(() => {
+    let rafId = 0;
+    const start = performance.now();
+    const tick = (now: number) => {
+      if (speaking) {
+        const sec = (now - start) * 0.001;
+        previewLevelsRef.current.output = 0.42 + 0.28 * Math.sin(sec * 12) + 0.14 * Math.cos(sec * 7);
+      } else {
+        previewLevelsRef.current.output *= 0.85;
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [speaking]);
+
+  const handleSelectAvatarPreset = (preset: AvatarPresetId) => {
+    setAvatarUploadError(null);
+    const next: AvatarPreference = { ...avatarPref, preset };
+    setAvatarPref(next);
+    saveAvatarPreference(next);
+  };
+
+  const handleAvatarUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setAvatarUploadError(null);
+    setAvatarUploading(true);
+    try {
+      const processed = await processCustomFaceUpload(file);
+      const next: AvatarPreference = {
+        preset: 'custom',
+        customImageDataUrl: processed.dataUrl,
+        customImageName: file.name,
+        customTraits: processed.traits,
+      };
+      setAvatarPref(next);
+      saveAvatarPreference(next);
+    } catch (err) {
+      setAvatarUploadError(err instanceof Error ? err.message : 'Unable to process photo.');
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
 
   const modes: Array<{ id: ThemeMode; label: string; icon: typeof Sun }> = [
     { id: 'system', label: t.themeSystemOption, icon: Monitor },
@@ -782,12 +877,12 @@ export function SettingsView({
           <div className="flex items-center gap-1 p-1 rounded-xl border border-slate-200/80 dark:border-slate-700/70 bg-white/60 dark:bg-slate-900/60">
             {modes.map((m) => {
               const Icon = m.icon;
-              const active = themeConfig.mode === m.id;
+              const active = themeMode === m.id;
               return (
                 <button
                   key={m.id}
                   type="button"
-                  onClick={() => onModeChange(m.id)}
+                  onClick={() => setThemeMode(m.id)}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
                     active
                       ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-950'
@@ -804,34 +899,39 @@ export function SettingsView({
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
           {LIVE_THEMES.map((theme) => {
-            const active = themeConfig.liveTheme === theme.id;
+            const active = liveTheme === theme.id;
+            const previewGradient =
+              resolvedScheme === 'dark' ? theme.darkPreviewGradient : theme.lightPreviewGradient;
             return (
               <button
                 key={theme.id}
                 type="button"
-                onClick={() => onLiveThemeChange(theme.id)}
-                className={`flex items-center justify-between gap-2.5 p-3 rounded-xl border text-left transition-colors cursor-pointer ${
+                onClick={() => setLiveTheme(theme.id)}
+                className={`flex items-center justify-between gap-2.5 p-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
                   active
                     ? 'theme-accent-active'
                     : 'border-slate-200/80 dark:border-slate-700/70 bg-white/60 dark:bg-slate-900/50 hover:border-slate-300 dark:hover:border-slate-600'
                 }`}
               >
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <span className="flex items-center -space-x-1 shrink-0">
-                    {theme.swatches.map((hex, i) => (
-                      <span
-                        key={i}
-                        className="w-4 h-4 rounded-full border border-white/80 dark:border-slate-900"
-                        style={{ backgroundColor: hex }}
-                      />
-                    ))}
-                  </span>
+                  {theme.previewImage ? (
+                    <img
+                      src={theme.previewImage}
+                      alt={theme.name}
+                      className="w-10 h-10 rounded-lg object-cover shrink-0 border border-white/50 dark:border-slate-700"
+                    />
+                  ) : (
+                    <span
+                      className="w-10 h-10 rounded-lg shrink-0 border border-white/50 dark:border-slate-700 flex items-center justify-center"
+                      style={{ background: previewGradient }}
+                    />
+                  )}
                   <div className="min-w-0">
                     <div className="text-xs font-semibold text-slate-900 dark:text-white truncate">
                       {theme.name}
                     </div>
                     <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                      {theme.tagline}
+                      {theme.subtitle}
                     </div>
                   </div>
                 </div>
@@ -841,6 +941,75 @@ export function SettingsView({
           })}
         </div>
 
+        {/* Live Motion, Speed, Surface Tint, Backdrop Clarity */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-200/70 dark:border-slate-800/80">
+          <div className="space-y-1.5">
+            <span className="block text-[11px] font-medium text-slate-600 dark:text-slate-400">
+              {t.themeControlAnimationSpeed}
+            </span>
+            <div className="grid grid-cols-3 gap-1 p-1 rounded-xl border border-slate-200/80 dark:border-slate-700/70 bg-white/60 dark:bg-slate-900/60">
+              {(['calm', 'normal', 'dynamic'] as MotionSpeed[]).map((spd) => (
+                <button
+                  key={spd}
+                  type="button"
+                  onClick={() => setMotionSpeed(spd)}
+                  className={`py-1 rounded-lg text-[11px] font-medium capitalize transition-colors cursor-pointer ${
+                    motionSpeed === spd
+                      ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-950'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  {spd}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <span className="block text-[11px] font-medium text-slate-600 dark:text-slate-400">
+              {t.themeControlSurfaceColors}
+            </span>
+            <div className="grid grid-cols-2 gap-1 p-1 rounded-xl border border-slate-200/80 dark:border-slate-700/70 bg-white/60 dark:bg-slate-900/60">
+              {(['adaptive', 'monochrome'] as SurfaceTone[]).map((tone) => (
+                <button
+                  key={tone}
+                  type="button"
+                  onClick={() => setSurfaceTone(tone)}
+                  className={`py-1 rounded-lg text-[11px] font-medium capitalize transition-colors cursor-pointer ${
+                    surfaceTone === tone
+                      ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-950'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  {tone}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <span className="block text-[11px] font-medium text-slate-600 dark:text-slate-400">
+              {t.themeControlBackdropVisibility}
+            </span>
+            <div className="grid grid-cols-3 gap-1 p-1 rounded-xl border border-slate-200/80 dark:border-slate-700/70 bg-white/60 dark:bg-slate-900/60">
+              {(['subtle', 'balanced', 'focus'] as ScrimIntensity[]).map((scrim) => (
+                <button
+                  key={scrim}
+                  type="button"
+                  onClick={() => setScrimIntensity(scrim)}
+                  className={`py-1 rounded-lg text-[11px] font-medium capitalize transition-colors cursor-pointer ${
+                    scrimIntensity === scrim
+                      ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-950'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  {scrim}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
         <div className="flex items-center justify-between pt-2 border-t border-slate-200/70 dark:border-slate-800/80">
           <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
             {t.liveMotionLabel}
@@ -848,45 +1017,174 @@ export function SettingsView({
           <button
             type="button"
             role="switch"
-            aria-checked={themeConfig.liveMotion}
-            onClick={() => onLiveMotionChange(!themeConfig.liveMotion)}
+            aria-checked={liveMotion}
+            onClick={() => setLiveMotion(!liveMotion)}
             className={`w-10 h-6 rounded-full p-0.5 transition-colors cursor-pointer ${
-              themeConfig.liveMotion ? 'bg-sky-500' : 'bg-slate-300 dark:bg-slate-700'
+              liveMotion ? 'bg-sky-500' : 'bg-slate-300 dark:bg-slate-700'
             }`}
           >
             <span
               className={`block w-5 h-5 rounded-full bg-white transition-transform ${
-                themeConfig.liveMotion ? 'translate-x-4' : 'translate-x-0'
+                liveMotion ? 'translate-x-4' : 'translate-x-0'
               }`}
             />
           </button>
         </div>
       </section>
 
-      {/* Neural Voice */}
-      <section className="p-5 rounded-2xl border theme-surface-glass space-y-4">
-        <div>
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{t.voiceSection}</h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400">{t.voiceSectionHint}</p>
+      {/* 3D Hologram Companion & Neural Voice */}
+      <section className="p-5 rounded-2xl border theme-surface-glass space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+              <Sparkles className="w-4 h-4 theme-accent-text" />
+              <span>{t.voiceSection} &amp; 3D Companion</span>
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">{t.voiceSectionHint}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenCompanion}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl theme-btn-primary text-xs font-semibold cursor-pointer"
+          >
+            <AudioLines className="w-3.5 h-3.5" />
+            <span>Launch 3D Companion</span>
+          </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <label className="space-y-1.5">
-            <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-              {t.voiceLabel}
-            </span>
-            <select
-              value={voice.persona}
-              onChange={(e) => updateConfig({ persona: e.target.value as VoicePersona })}
-              className="w-full px-3 py-2 rounded-xl text-xs border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
-            >
-              <option value="Zephyr">{t.voiceZephyr}</option>
-              <option value="Kore">{t.voiceKore}</option>
-              <option value="Puck">{t.voicePuck}</option>
-              <option value="Charon">{t.voiceCharon}</option>
-              <option value="Fenrir">{t.voiceFenrir}</option>
-            </select>
-          </label>
+        {/* Live 3D Avatar Preview + Preset Cards */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+          <div className="lg:col-span-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-100/70 dark:bg-slate-950/80 overflow-hidden flex flex-col">
+            <div className="relative h-64 w-full bg-transparent overflow-hidden">
+              <LiveVoiceAvatarCanvas
+                status={speaking ? 'speaking' : 'idle'}
+                voiceName={voice.persona}
+                levelsRef={previewLevelsRef}
+                avatarSrc={activeAvatarSource.src}
+                isPrestyledHologram={activeAvatarSource.isPrestyledHologram}
+                avatarPreset={avatarPref.preset}
+                customTraits={avatarPref.customTraits}
+                isDark={resolvedScheme === 'dark'}
+              />
+            </div>
+            <div className="px-3.5 py-2.5 border-t border-slate-200/70 dark:border-slate-800/80 bg-white/90 dark:bg-slate-900/90 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+              <span>
+                Active Voice: <strong className="text-slate-900 dark:text-slate-100">{voice.persona}</strong>
+              </span>
+              <span>Drag to orbit · Click to nod</span>
+            </div>
+          </div>
+
+          <div className="lg:col-span-7 flex flex-col justify-between gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {AVATAR_PRESETS.map((preset) => {
+                const isSelected = avatarPref.preset === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => handleSelectAvatarPreset(preset.id)}
+                    className={`rounded-xl border p-2.5 text-left transition-all cursor-pointer flex flex-col gap-2 ${
+                      isSelected
+                        ? 'theme-accent-active ring-2 ring-[var(--theme-accent-ring)]'
+                        : 'border-slate-200/80 dark:border-slate-700/80 bg-white/70 dark:bg-slate-900/50 hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="relative h-24 w-full rounded-lg overflow-hidden bg-slate-950">
+                      <img
+                        src={preset.imageSrc}
+                        alt={preset.label}
+                        className="w-full h-full object-cover object-top"
+                      />
+                      {isSelected && (
+                        <span className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full theme-btn-primary flex items-center justify-center">
+                          <Check className="w-3 h-3" />
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                        {preset.label}
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-snug">
+                        {preset.subtitle}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+
+              <div
+                className={`rounded-xl border p-2.5 text-left transition-all flex flex-col gap-2 ${
+                  avatarPref.preset === 'custom'
+                    ? 'theme-accent-active ring-2 ring-[var(--theme-accent-ring)]'
+                    : 'border-slate-200/80 dark:border-slate-700/80 bg-white/70 dark:bg-slate-900/50'
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => avatarFileInputRef.current?.click()}
+                  disabled={avatarUploading}
+                  className="relative h-24 w-full rounded-lg overflow-hidden bg-slate-900/90 border border-dashed border-slate-700 flex flex-col items-center justify-center gap-1 text-slate-300 hover:border-cyan-500/70 transition-colors cursor-pointer"
+                >
+                  {avatarPref.customImageDataUrl ? (
+                    <img
+                      src={avatarPref.customImageDataUrl}
+                      alt="Custom 3D avatar"
+                      className="w-full h-full object-cover object-top"
+                    />
+                  ) : (
+                    <>
+                      <Upload className="w-4 h-4 text-cyan-400" />
+                      <span className="text-[10px] font-medium">
+                        {avatarUploading ? 'Processing...' : 'Upload Portrait'}
+                      </span>
+                    </>
+                  )}
+                </button>
+                <input
+                  ref={avatarFileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={handleAvatarUpload}
+                />
+                <div>
+                  <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                    Custom Photo
+                  </div>
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-snug">
+                    Face-matched 3D hologram rig
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {avatarUploadError && (
+              <p className="text-xs text-rose-500 dark:text-rose-400">{avatarUploadError}</p>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <label className="space-y-1.5">
+                <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  {t.voiceLabel}
+                </span>
+                <select
+                  value={voice.persona}
+                  onChange={(e) => {
+                    const nextPersona = e.target.value as VoicePersona;
+                    updateConfig({ persona: nextPersona });
+                    saveVoicePreference(nextPersona);
+                  }}
+                  className="w-full px-3 py-2 rounded-xl text-xs border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+                >
+                  <option value="Zephyr">{t.voiceZephyr}</option>
+                  <option value="Kore">{t.voiceKore}</option>
+                  <option value="Puck">{t.voicePuck}</option>
+                  <option value="Charon">{t.voiceCharon}</option>
+                  <option value="Fenrir">{t.voiceFenrir}</option>
+                </select>
+              </label>
 
           <div className="space-y-1.5">
             <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">
@@ -907,6 +1205,8 @@ export function SettingsView({
                   {acc === 'bn-bd' ? t.accentBnBd : t.accentBnIn}
                 </button>
               ))}
+            </div>
+          </div>
             </div>
           </div>
         </div>
@@ -965,14 +1265,72 @@ export function SettingsView({
         </div>
       </section>
 
+      {/* Cross-Device Real-Time Sync */}
+      <section className="p-5 rounded-2xl border theme-surface-glass space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+              {t.syncSectionTitle}
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              {t.syncSectionHint}
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={!syncEnabled || syncingNow}
+            onClick={() => {
+              setSyncingNow(true);
+              void onSyncNow().finally(() => setSyncingNow(false));
+            }}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/70 text-slate-800 dark:text-slate-100 hover:border-sky-500/50 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${syncingNow ? 'animate-spin' : ''}`} />
+            <span>{syncingNow ? t.syncSyncing : t.syncNowBtn}</span>
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-200/70 dark:border-slate-800/80">
+          <div className="space-y-0.5">
+            <div className="text-xs font-medium text-slate-700 dark:text-slate-300">
+              {t.syncEnabledLabel}
+            </div>
+            <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+              {lastSyncedAt
+                ? `${t.syncLastSynced}: ${new Intl.DateTimeFormat(dateLocale(lang), {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  }).format(lastSyncedAt)}`
+                : t.syncNeverSynced}
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={syncEnabled}
+            onClick={() => onToggleSync(!syncEnabled)}
+            className={`w-10 h-6 rounded-full p-0.5 transition-colors cursor-pointer ${
+              syncEnabled ? 'bg-sky-500' : 'bg-slate-300 dark:bg-slate-700'
+            }`}
+          >
+            <span
+              className={`block w-5 h-5 rounded-full bg-white transition-transform ${
+                syncEnabled ? 'translate-x-4' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+      </section>
+
       {/* About */}
       <section className="p-5 rounded-2xl border theme-surface-glass flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
-            SupremeAI Studio Desktop
+            SupremeAI Studio Monorepo
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            {runtimeLabel} · Synced with supremeai-frontend
+            {runtimeLabel} · Web + Desktop (Tauri v2) + Android (Kotlin/Compose)
           </p>
         </div>
         <span className="font-mono text-xs text-slate-600 dark:text-slate-300 tabular-nums">

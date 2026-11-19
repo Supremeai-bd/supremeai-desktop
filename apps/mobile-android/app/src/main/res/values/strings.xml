@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SupremeAI Studio</string>
+    <string name="cd_app_logo">SupremeAI Studio Emblem</string>
+    <string name="cd_navigation_menu">Open navigation drawer</string>
+    <string name="cd_voice_mic">Voice dictation microphone</string>
+    <string name="cd_live_voice">Live voice companion</string>
+    <string name="cd_send_message">Send message</string>
+    <string name="cd_stop_generation">Stop generation</string>
+    <string name="cd_attach_media">Attach image or document</string>
+    <string name="cd_workspace_dock">Toggle workspace artifact dock</string>
+    <string name="cd_open_sidebar">Open navigation sidebar</string>
+    <string name="cd_new_chat">Start new conversation</string>
+    <string name="cd_chat_menu">Conversation options</string>
+    <string name="cd_stop_streaming">Stop generating</string>
+    <string name="cd_attach_menu">Attach file or prompt recipe</string>
+    <string name="cd_voice_mode">Toggle live voice mode</string>
+    <string name="cd_brand_mark">SupremeAI Studio brand emblem</string>
+    <string name="cd_hologram_avatar">3D hologram voice companion avatar</string>
+    <string name="cd_navigate_back">Navigate back</string>
+    <string name="cd_close_panel">Close panel</string>
+</resources>

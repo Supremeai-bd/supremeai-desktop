@@ -11,6 +11,7 @@ import {
   PanelLeft,
   Pin,
   Plus,
+  Puzzle,
   Search,
   Settings,
   Shield,
@@ -20,16 +21,12 @@ import {
 import UserSessionPanel from '../auth/UserSessionPanel';
 import { BrandMark } from './BrandMark';
 import LanguageToggle from './LanguageToggle';
-import { ThemeControlPopover } from './ThemeControlPopover';
+import { ThemeControlPopover } from './theme/ThemeControlPopover';
 import { useI18n } from '../i18n';
 import type {
   ActiveTab,
-  LiveThemeId,
-  ResolvedColorScheme,
   RolePersona,
   SavedChat,
-  ThemeConfig,
-  ThemeMode,
 } from '../types/studio';
 
 interface SidebarProps {
@@ -48,10 +45,7 @@ interface SidebarProps {
   activeRole: RolePersona;
   projectsCount: number;
   activeKnowledgeCount: number;
-  themeConfig: ThemeConfig;
-  resolvedScheme: ResolvedColorScheme;
-  onThemeModeChange: (mode: ThemeMode) => void;
-  onLiveThemeChange: (id: LiveThemeId) => void;
+  activePluginsCount: number;
   onOpenAdmin: () => void;
   onOpenFeedback: () => void;
   onSessionEmailChange: (email: string | null) => void;
@@ -73,10 +67,7 @@ export function Sidebar({
   activeRole,
   projectsCount,
   activeKnowledgeCount,
-  themeConfig,
-  resolvedScheme,
-  onThemeModeChange,
-  onLiveThemeChange,
+  activePluginsCount,
   onOpenAdmin,
   onOpenFeedback,
   onSessionEmailChange,
@@ -353,6 +344,20 @@ export function Sidebar({
 
         <button
           type="button"
+          onClick={() => onSelectTab('plugins')}
+          className={navBtnClass('plugins')}
+        >
+          <span className="inline-flex items-center gap-2.5 truncate">
+            <Puzzle className="w-4 h-4 text-cyan-500 shrink-0" />
+            <span className="truncate">{t.pluginsTools}</span>
+          </span>
+          <span className="font-mono tabular-nums text-[11px] text-cyan-600 dark:text-cyan-400">
+            {activePluginsCount}
+          </span>
+        </button>
+
+        <button
+          type="button"
           onClick={onOpenAdmin}
           className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-200/45 dark:hover:bg-slate-800/55 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
         >
@@ -431,10 +436,9 @@ export function Sidebar({
         <div className="flex items-center justify-between gap-1.5">
           <LanguageToggle />
           <ThemeControlPopover
-            config={themeConfig}
-            resolvedScheme={resolvedScheme}
-            onModeChange={onThemeModeChange}
-            onLiveThemeChange={onLiveThemeChange}
+            compact
+            align="left"
+            placement="top"
             onOpenSettings={() => onSelectTab('settings')}
           />
           <button

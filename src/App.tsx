@@ -15,7 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import AdminDashboard from './admin/AdminDashboard';
-import HolographicHero from './companion/HolographicHero';
+import { LiveVoicePanel } from './companion/LiveVoicePanel';
 import { ChatEmptyState } from './components/ChatEmptyState';
 import { ChatInput } from './components/ChatInput';
 import { ChatThread } from './components/ChatThread';
@@ -29,6 +29,8 @@ import {
   RolesView,
   SettingsView,
 } from './components/StudioViews';
+import { LiveScreenBackdrop } from './components/theme/LiveScreenBackdrop';
+import { UserPluginsView } from './components/user/UserPluginsView';
 import { WorkspaceDock } from './components/WorkspaceDock';
 import { isDesktopTauri, sendDesktopChat } from './bridge/desktopBridge';
 import {
@@ -38,9 +40,18 @@ import {
   STUDIO_MODELS,
   SYSTEM_ROLES,
 } from './data/studioData';
+import { INITIAL_PLUGINS } from './data/userPlugins';
 import { useSpeech } from './hooks/useSpeech';
-import { useStudioTheme } from './hooks/useStudioTheme';
 import { useI18n } from './i18n';
+import { useThemeStore } from './stores/useThemeStore';
+import {
+  RealtimeSyncClient,
+  loadLastSyncedAt,
+  loadSyncEnabled,
+  mergeSyncedChats,
+  saveSyncEnabled,
+  type SyncThemePayload,
+} from './sync/realtimeSync';
 import type {
   ActiveTab,
   ChatAttachment,
@@ -49,6 +60,7 @@ import type {
   GatewayStatus,
   KnowledgeDoc,
   ModelOption,
+  PluginItem,
   RolePersona,
   SavedChat,
   WorkspaceDockTab,
@@ -59,6 +71,7 @@ const HISTORY_KEY = 'supremeai.desktop.history.v1';
 const ROLES_KEY = 'supremeai.desktop.custom_roles.v1';
 const PROJECTS_KEY = 'supremeai.desktop.projects.v1';
 const KNOWLEDGE_KEY = 'supremeai.desktop.knowledge.v1';
+const PLUGINS_KEY = 'supremeai.desktop.plugins.v1';
 
 function newId(prefix = 'id') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -132,14 +145,30 @@ export default function App() {
     config: voiceConfig,
     updateConfig: updateVoiceConfig,
   } = useSpeech();
-  const {
-    config: themeConfig,
-    resolvedScheme,
-    setMode: setThemeMode,
-    setLiveTheme,
-    setLiveMotion,
-    toggleLightDark,
-  } = useStudioTheme();
+  const resolvedScheme = useThemeStore((s) => s.resolvedScheme);
+  const setThemeMode = useThemeStore((s) => s.setThemeMode);
+  const setOsPrefersDark = useThemeStore((s) => s.setOsPrefersDark);
+  const setPrefersReducedMotion = useThemeStore((s) => s.setPrefersReducedMotion);
+
+  // Sync OS dark mode & reduced-motion preferences into useThemeStore
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const darkMq = window.matchMedia('(prefers-color-scheme: dark)');
+    const motionMq = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+    setOsPrefersDark(darkMq.matches, false);
+    setPrefersReducedMotion(motionMq.matches);
+
+    const onDarkChange = (e: MediaQueryListEvent) => setOsPrefersDark(e.matches, true);
+    const onMotionChange = (e: MediaQueryListEvent) => setPrefersReducedMotion(e.matches);
+
+    darkMq.addEventListener('change', onDarkChange);
+    motionMq.addEventListener('change', onMotionChange);
+    return () => {
+      darkMq.removeEventListener('change', onDarkChange);
+      motionMq.removeEventListener('change', onMotionChange);
+    };
+  }, [setOsPrefersDark, setPrefersReducedMotion]);
 
   const [savedChats, setSavedChats] = useState<SavedChat[]>(() => loadChats(t.newConversation));
   const [conversationId, setConversationId] = useState<string>(() => newId('conv'));
@@ -165,9 +194,16 @@ export default function App() {
   const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDoc[]>(() =>
     loadJson<KnowledgeDoc[]>(KNOWLEDGE_KEY, DEFAULT_KNOWLEDGE_DOCS)
   );
+  const [plugins, setPlugins] = useState<PluginItem[]>(() =>
+    loadJson<PluginItem[]>(PLUGINS_KEY, INITIAL_PLUGINS)
+  );
   const activeKnowledgeDocs = useMemo(
     () => knowledgeDocs.filter((d) => d.enabled),
     [knowledgeDocs]
+  );
+  const activePluginsCount = useMemo(
+    () => plugins.filter((p) => p.isEnabled).length,
+    [plugins]
   );
 
   // Workspace Dock state (Preview / Monaco Code / xterm.js Terminal)
@@ -186,14 +222,17 @@ export default function App() {
   const [adminOpen, setAdminOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [hologramOpen, setHologramOpen] = useState(false);
-  const [hologramDocked, setHologramDocked] = useState(true);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
+  const [syncEnabled, setSyncEnabled] = useState<boolean>(() => loadSyncEnabled());
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(() => loadLastSyncedAt());
 
   const abortRef = useRef<AbortController | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const chatMenuRef = useRef<HTMLDivElement>(null);
+  const syncClientRef = useRef<RealtimeSyncClient | null>(null);
+  const applyingRemoteSyncRef = useRef(false);
 
   const runtimeLabel = isDesktopTauri() ? 'Tauri v2 Native Desktop' : 'Desktop Studio Preview';
   const currentChatMeta = useMemo(
@@ -237,6 +276,96 @@ export default function App() {
       // Ignore storage failure
     }
   }, [knowledgeDocs]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PLUGINS_KEY, JSON.stringify(plugins));
+    } catch {
+      // Ignore storage failure
+    }
+    if (syncEnabled && !applyingRemoteSyncRef.current) {
+      syncClientRef.current?.publish('plugins', plugins);
+    }
+  }, [plugins, syncEnabled]);
+
+  // Cross-Device Real-Time Sync engine (Web + Desktop + Android)
+  useEffect(() => {
+    if (!syncEnabled) {
+      syncClientRef.current?.stop();
+      syncClientRef.current = null;
+      return;
+    }
+
+    const client = new RealtimeSyncClient({
+      onSyncActivity: (ts) => setLastSyncedAt(ts),
+      onEnvelope: (envelope) => {
+        applyingRemoteSyncRef.current = true;
+        try {
+          if (envelope.domain === 'chats' && Array.isArray(envelope.payload)) {
+            const incoming = envelope.payload as SavedChat[];
+            setSavedChats((prev) => mergeSyncedChats(prev, incoming));
+          } else if (envelope.domain === 'roles' && Array.isArray(envelope.payload)) {
+            setCustomRoles(envelope.payload as RolePersona[]);
+          } else if (envelope.domain === 'knowledge' && Array.isArray(envelope.payload)) {
+            setKnowledgeDocs(envelope.payload as KnowledgeDoc[]);
+          } else if (envelope.domain === 'plugins' && Array.isArray(envelope.payload)) {
+            setPlugins(envelope.payload as PluginItem[]);
+          } else if (envelope.domain === 'theme' && envelope.payload && typeof envelope.payload === 'object') {
+            useThemeStore.getState().applyRemoteThemeConfig(envelope.payload as SyncThemePayload);
+          }
+        } finally {
+          window.setTimeout(() => {
+            applyingRemoteSyncRef.current = false;
+          }, 50);
+        }
+      },
+    });
+    syncClientRef.current = client;
+    client.start();
+
+    const unsubTheme = useThemeStore.subscribe((state, prev) => {
+      if (applyingRemoteSyncRef.current) return;
+      if (
+        state.themeMode !== prev.themeMode ||
+        state.liveTheme !== prev.liveTheme ||
+        state.liveMotion !== prev.liveMotion ||
+        state.motionSpeed !== prev.motionSpeed ||
+        state.surfaceTone !== prev.surfaceTone ||
+        state.scrimIntensity !== prev.scrimIntensity
+      ) {
+        client.publish<SyncThemePayload>('theme', {
+          themeMode: state.themeMode,
+          liveTheme: state.liveTheme,
+          liveMotion: state.liveMotion,
+          motionSpeed: state.motionSpeed,
+          surfaceTone: state.surfaceTone,
+          scrimIntensity: state.scrimIntensity,
+        });
+      }
+    });
+
+    return () => {
+      unsubTheme();
+      client.stop();
+      syncClientRef.current = null;
+    };
+  }, [syncEnabled, sessionEmail]);
+
+  // Publish chats, custom roles, and knowledge changes to sync engine
+  useEffect(() => {
+    if (!syncEnabled || applyingRemoteSyncRef.current || savedChats.length === 0) return;
+    syncClientRef.current?.publish('chats', savedChats);
+  }, [savedChats, syncEnabled]);
+
+  useEffect(() => {
+    if (!syncEnabled || applyingRemoteSyncRef.current) return;
+    syncClientRef.current?.publish('roles', customRoles);
+  }, [customRoles, syncEnabled]);
+
+  useEffect(() => {
+    if (!syncEnabled || applyingRemoteSyncRef.current) return;
+    syncClientRef.current?.publish('knowledge', knowledgeDocs);
+  }, [knowledgeDocs, syncEnabled]);
 
   // Save current conversation updates into history
   useEffect(() => {
@@ -588,41 +717,52 @@ export default function App() {
             ? t.projects
             : activeTab === 'knowledge'
               ? t.knowledgeBase
-              : t.settings;
+              : activeTab === 'plugins'
+                ? t.pluginsTools
+                : t.settings;
 
   const latestAssistantReply = messages
     .filter((m) => m.role === 'assistant' && m.state !== 'error')
     .slice(-1)[0]?.content;
 
+  const streamingAssistantText = busy
+    ? messages.find((m) => m.role === 'assistant' && m.state === 'loading')?.content ?? ''
+    : '';
+
   return (
-    <div className="h-full w-full flex overflow-hidden studio-backdrop text-slate-900 dark:text-slate-100">
-      <Sidebar
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        activeTab={activeTab}
-        onSelectTab={setActiveTab}
-        sessions={savedChats}
-        activeSessionId={conversationId}
-        onSelectSession={openChat}
-        onNewChat={startNewChat}
-        onRenameSession={renameChat}
-        onDeleteSession={deleteChat}
-        onTogglePin={togglePinChat}
-        onExportSession={exportChat}
-        activeRole={activeRole}
-        projectsCount={projects.length}
-        activeKnowledgeCount={activeKnowledgeDocs.length}
-        themeConfig={themeConfig}
-        resolvedScheme={resolvedScheme}
-        onThemeModeChange={setThemeMode}
-        onLiveThemeChange={setLiveTheme}
-        onOpenAdmin={() => setAdminOpen(true)}
-        onOpenFeedback={() => setFeedbackOpen(true)}
-        onSessionEmailChange={setSessionEmail}
+    <div className="relative h-full w-full flex overflow-hidden text-slate-900 dark:text-slate-100">
+      {/* SupremeAI Frontend Live Screen Animated Scenic & Particle Backdrop */}
+      <LiveScreenBackdrop
+        isEmpty={activeTab === 'chat' && messages.length === 0}
+        isChatView={activeTab === 'chat'}
       />
 
+      <div className="relative z-10 h-full flex shrink-0">
+        <Sidebar
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          activeTab={activeTab}
+          onSelectTab={setActiveTab}
+          sessions={savedChats}
+          activeSessionId={conversationId}
+          onSelectSession={openChat}
+          onNewChat={startNewChat}
+          onRenameSession={renameChat}
+          onDeleteSession={deleteChat}
+          onTogglePin={togglePinChat}
+          onExportSession={exportChat}
+          activeRole={activeRole}
+          projectsCount={projects.length}
+          activeKnowledgeCount={activeKnowledgeDocs.length}
+          activePluginsCount={activePluginsCount}
+          onOpenAdmin={() => setAdminOpen(true)}
+          onOpenFeedback={() => setFeedbackOpen(true)}
+          onSessionEmailChange={setSessionEmail}
+        />
+      </div>
+
       {/* Main Studio Shell + Resizable Workspace Dock */}
-      <div className="flex-1 min-w-0 h-full flex relative overflow-hidden">
+      <div className="flex-1 min-w-0 h-full flex relative z-10 overflow-hidden">
         <main className="flex-1 min-w-0 h-full flex flex-col relative overflow-hidden">
           {/* Top Header Bar */}
           <header className="h-14 shrink-0 px-4 sm:px-5 flex items-center justify-between gap-4 border-b border-slate-200/75 dark:border-slate-800/80 bg-white/45 dark:bg-slate-950/35 backdrop-blur-md z-10">
@@ -663,6 +803,20 @@ export default function App() {
                 <Search className="w-3.5 h-3.5" />
                 <span>{t.commandPalette}</span>
                 <kbd className="font-mono text-[10px]">⌘K</kbd>
+              </button>
+
+              {/* 3D Companion toggle */}
+              <button
+                type="button"
+                onClick={() => setHologramOpen((v) => !v)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                  hologramOpen
+                    ? 'theme-accent-active'
+                    : 'border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 text-slate-700 dark:text-slate-200 hover:border-slate-300 dark:hover:border-slate-700'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>{t.hologramBtn}</span>
               </button>
 
               {/* Workspace Dock toggle */}
@@ -922,18 +1076,77 @@ export default function App() {
                 />
               )}
 
+              {activeTab === 'plugins' && (
+                <UserPluginsView
+                  plugins={plugins}
+                  onTogglePlugin={(id) =>
+                    setPlugins((prev) =>
+                      prev.map((p) => (p.id === id ? { ...p, isEnabled: !p.isEnabled } : p))
+                    )
+                  }
+                  onAddCustomPlugin={(item) =>
+                    setPlugins((prev) => [{ ...item, id: newId('plugin') }, ...prev])
+                  }
+                />
+              )}
+
               {activeTab === 'settings' && (
                 <SettingsView
-                  themeConfig={themeConfig}
-                  onModeChange={setThemeMode}
-                  onLiveThemeChange={setLiveTheme}
-                  onLiveMotionChange={setLiveMotion}
+                  onOpenCompanion={() => {
+                    setHologramOpen(true);
+                    setActiveTab('chat');
+                  }}
                   runtimeLabel={runtimeLabel}
+                  syncEnabled={syncEnabled}
+                  lastSyncedAt={lastSyncedAt}
+                  onToggleSync={(next) => {
+                    setSyncEnabled(next);
+                    saveSyncEnabled(next);
+                  }}
+                  onSyncNow={async () => {
+                    const themeState = useThemeStore.getState();
+                    await syncClientRef.current?.syncNow({
+                      chats: { updatedAt: Date.now(), items: savedChats },
+                      theme: {
+                        updatedAt: Date.now(),
+                        data: {
+                          themeMode: themeState.themeMode,
+                          liveTheme: themeState.liveTheme,
+                          liveMotion: themeState.liveMotion,
+                          motionSpeed: themeState.motionSpeed,
+                          surfaceTone: themeState.surfaceTone,
+                          scrimIntensity: themeState.scrimIntensity,
+                        },
+                      },
+                      roles: { updatedAt: Date.now(), items: customRoles },
+                      knowledge: { updatedAt: Date.now(), items: knowledgeDocs },
+                      plugins: { updatedAt: Date.now(), items: plugins },
+                    });
+                  }}
                 />
               )}
             </div>
           )}
         </main>
+
+        {/* SupremeAI Frontend 3D Real-time Voice Companion */}
+        <LiveVoicePanel
+          isOpen={hologramOpen}
+          isDark={resolvedScheme === 'dark'}
+          voiceName={voiceConfig.persona}
+          isSpeaking={speaking}
+          isStreaming={busy}
+          streamingContent={streamingAssistantText}
+          latestAssistantContent={latestAssistantReply || ''}
+          onVoiceChange={(persona) => updateVoiceConfig({ persona })}
+          onVoiceSpeedChange={(speed) => updateVoiceConfig({ speed })}
+          onSpeakLatest={() => {
+            const textToRead = latestAssistantReply || t.testVoicePhrase;
+            void speak(textToRead, lang);
+          }}
+          onStopSpeaking={stopSpeaking}
+          onClose={() => setHologramOpen(false)}
+        />
 
         {/* Resizable Workspace Dock (Preview / Monaco Code / xterm.js Terminal) */}
         <WorkspaceDock
@@ -963,18 +1176,6 @@ export default function App() {
         />
       </div>
 
-      {/* On-demand 3D Holographic Companion */}
-      {hologramOpen && (
-        <HolographicHero
-          state={busy ? 'thinking' : speaking ? 'speaking' : 'idle'}
-          isDocked={hologramDocked}
-          onToggleDock={() => setHologramDocked((v) => !v)}
-          onClose={() => setHologramOpen(false)}
-          latestReply={latestAssistantReply}
-          onSendPrompt={(prompt) => void sendMessage(prompt)}
-        />
-      )}
-
       {/* Command Palette (⌘K) */}
       <CommandPalette
         open={commandOpen}
@@ -991,7 +1192,7 @@ export default function App() {
         onOpenFeedback={() => setFeedbackOpen(true)}
         onToggleDock={() => setDockOpen((v) => !v)}
         onToggleHologram={() => setHologramOpen((v) => !v)}
-        onToggleTheme={toggleLightDark}
+        onToggleTheme={() => setThemeMode(resolvedScheme === 'dark' ? 'light' : 'dark')}
         onToggleLanguage={() => setLang(lang === 'bn' ? 'en' : 'bn')}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
       />

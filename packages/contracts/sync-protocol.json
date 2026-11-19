@@ -1,0 +1,32 @@
+{
+  "protocolVersion": "1.0.0",
+  "gatewayBaseUrl": "https://supremeai-api-ulw0.onrender.com",
+  "endpoints": {
+    "snapshotGet": "/api/v1/sync/state",
+    "snapshotPut": "/api/v1/sync/state",
+    "realtimeStreamSse": "/api/v1/sync/stream"
+  },
+  "broadcastChannel": "supremeai.realtime.sync.v1",
+  "conflictResolution": {
+    "strategy": "last-write-wins",
+    "chatsMerge": "per-conversation-id-max-updatedAt",
+    "collectionsMerge": "domain-updatedAt-timestamp"
+  },
+  "domains": [
+    "chats",
+    "theme",
+    "roles",
+    "knowledge",
+    "plugins",
+    "voice_avatar"
+  ],
+  "platforms": ["web", "desktop", "android", "ios"],
+  "envelopeSchema": {
+    "deviceId": "string (persistent client UUID)",
+    "platform": "web | desktop | android | ios",
+    "domain": "chats | theme | roles | knowledge | plugins | voice_avatar",
+    "updatedAt": "number (epoch ms)",
+    "revision": "number (monotonic per-device counter)",
+    "payload": "unknown (domain-specific JSON state)"
+  }
+}

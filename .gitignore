@@ -28,3 +28,12 @@ src-tauri/target/
 *.njsproj
 *.sln
 *.sw?
+
+# Android / Gradle (apps/mobile-android)
+apps/mobile-android/.gradle/
+apps/mobile-android/build/
+apps/mobile-android/app/build/
+apps/mobile-android/local.properties
+apps/mobile-android/*.keystore
+apps/mobile-android/*.jks
+

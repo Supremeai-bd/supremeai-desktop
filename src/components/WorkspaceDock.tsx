@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { CodeViewer } from './CodeViewer';
 import { TerminalPanel } from './TerminalPanel';
+import { MobileDeviceFrame } from './workspace/MobileDeviceFrame';
 import { useI18n } from '../i18n';
 import type { ResolvedColorScheme, WorkspaceDockTab, WorkspaceFile } from '../types/studio';
 
@@ -76,6 +77,7 @@ export function WorkspaceDock({
   const [isDragging, setIsDragging] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [viewport, setViewport] = useState<ViewportSize>('desktop');
+  const [mobileOrientation, setMobileOrientation] = useState<'portrait' | 'landscape'>('portrait');
   const [reloadNonce, setReloadNonce] = useState(0);
   const dockRef = useRef<HTMLElement>(null);
 
@@ -286,14 +288,33 @@ export function WorkspaceDock({
       <div className="flex-1 min-h-0 relative overflow-hidden">
         {activeTab === 'preview' && (
           <div className="h-full w-full flex items-center justify-center bg-slate-100/80 dark:bg-slate-950/70 p-3 overflow-auto">
-            <iframe
-              key={reloadNonce}
-              title="SupremeAI Live Preview"
-              sandbox="allow-scripts"
-              srcDoc={previewSrcDoc}
-              style={{ width: previewFrameWidth }}
-              className="h-full max-w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white shadow-sm transition-all"
-            />
+            {viewport === 'mobile' ? (
+              <MobileDeviceFrame
+                orientation={mobileOrientation}
+                onRotate={() =>
+                  setMobileOrientation((o) => (o === 'portrait' ? 'landscape' : 'portrait'))
+                }
+                onReload={() => setReloadNonce((n) => n + 1)}
+                darkChrome={resolvedScheme === 'dark'}
+              >
+                <iframe
+                  key={reloadNonce}
+                  title="SupremeAI Mobile Live Preview"
+                  sandbox="allow-scripts"
+                  srcDoc={previewSrcDoc}
+                  className="w-full h-full border-0 bg-white"
+                />
+              </MobileDeviceFrame>
+            ) : (
+              <iframe
+                key={reloadNonce}
+                title="SupremeAI Live Preview"
+                sandbox="allow-scripts"
+                srcDoc={previewSrcDoc}
+                style={{ width: previewFrameWidth }}
+                className="h-full max-w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white shadow-sm transition-all"
+              />
+            )}
           </div>
         )}
 

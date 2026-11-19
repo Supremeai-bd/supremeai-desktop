@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "gatewayBaseUrl": "https://supremeai-api-ulw0.onrender.com",
+  "models": [
+    {
+      "id": "supreme-core",
+      "gatewayModel": "auto",
+      "name": "SupremeAI Core",
+      "shortLabel": "Core",
+      "speed": "Balanced",
+      "accentHex": "#06b6d4",
+      "description": "Flagship multimodal model for general engineering, architecture, and writing"
+    },
+    {
+      "id": "supreme-spark",
+      "gatewayModel": "supremeai/groq",
+      "name": "SupremeAI Spark",
+      "shortLabel": "Spark",
+      "speed": "Fast",
+      "accentHex": "#f59e0b",
+      "description": "Ultra-low latency streaming for rapid code & everyday queries"
+    },
+    {
+      "id": "supreme-reason",
+      "gatewayModel": "supremeai/openrouter",
+      "name": "SupremeAI Reason",
+      "shortLabel": "Reason",
+      "speed": "Deep",
+      "accentHex": "#8b5cf6",
+      "description": "Deep architectural planning, math, and multi-step debugging"
+    },
+    {
+      "id": "supreme-deep",
+      "gatewayModel": "supremeai/openrouter",
+      "name": "SupremeAI Deep",
+      "shortLabel": "Deep",
+      "speed": "Deep",
+      "accentHex": "#6366f1",
+      "description": "Long-horizon synthesis, formal verification, and exhaustive technical audits"
+    },
+    {
+      "id": "supreme-web",
+      "gatewayModel": "auto",
+      "name": "SupremeAI Web",
+      "shortLabel": "Web",
+      "speed": "Balanced",
+      "accentHex": "#10b981",
+      "description": "Interactive HTML/CSS/React prototyping tuned for live Workspace Dock previews"
+    },
+    {
+      "id": "supreme-api",
+      "gatewayModel": "auto",
+      "name": "SupremeAI API",
+      "shortLabel": "API",
+      "speed": "Fast",
+      "accentHex": "#0ea5e9",
+      "description": "Strict JSON, OpenAPI schemas, Tauri Rust IPC, and backend integrations"
+    }
+  ]
+}

@@ -1,3 +1,7 @@
+import type { LiveThemeId, ResolvedColorScheme, ThemeMode } from '../stores/useThemeStore';
+
+export type { LiveThemeId, ResolvedColorScheme, ThemeMode };
+
 export type Role = 'user' | 'assistant';
 
 export type ActiveTab =
@@ -6,25 +10,32 @@ export type ActiveTab =
   | 'roles'
   | 'projects'
   | 'knowledge'
+  | 'plugins'
   | 'settings';
 
 export type WorkspaceDockTab = 'preview' | 'code' | 'terminal';
 
-export type ThemeMode = 'system' | 'light' | 'dark';
-export type ResolvedColorScheme = 'light' | 'dark';
-
-export type LiveThemeId =
-  | 'alpine-dunes'
-  | 'misty-fjords'
-  | 'emerald-highlands'
-  | 'amber-canyon'
-  | 'midnight-peaks'
-  | 'nebula'
-  | 'aurora-borealis'
-  | 'oceanic-horizon'
-  | 'cyber-studio';
-
 export type GatewayStatus = 'idle' | 'connected' | 'offline';
+
+export interface PluginItem {
+  id: string;
+  name: string;
+  tagline: string;
+  description: string;
+  category: 'developer' | 'ai-grounding' | 'productivity' | 'security';
+  isEnabled: boolean;
+  version: string;
+  author: string;
+}
+
+export interface PromptTemplateItem {
+  id: string;
+  title: string;
+  category: 'code' | 'architecture' | 'security' | 'review' | 'writing' | 'research' | 'general';
+  description: string;
+  template: string;
+  tags: string[];
+}
 
 export interface ChatAttachment {
   id: string;
