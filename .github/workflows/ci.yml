@@ -24,35 +24,22 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
 
       - name: Install dependencies
         shell: bash
-        run: npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
+        run: npm ci
 
-      - name: Run Security Unit Tests
+      - name: Run JavaScript Tests
         shell: bash
-        run: npm run test:security
+        run: npm test
 
       - name: Typecheck Cloudflare Edge Functions
-        shell: bash
-        run: |
-          npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler --skipLibCheck \
-            functions/_lib/edgeHelpers.ts \
-            'functions/api/[[path]].ts' \
-            'functions/api/admin/[[path]].ts' \
-            functions/api/workspace/browser-proxy.ts \
-            functions/api/workspace/browser-vault.ts \
-            functions/api/workspace/browser-schedules.ts \
-            functions/api/workspace/gmail-session.ts \
-            functions/api/workspace/terminal.ts \
-            'functions/api/auth/totp/[[path]].ts' \
-            functions/api/auth/verify-2fa.ts \
-            'functions/api/git/oauth/[[path]].ts'
+        run: npm run typecheck:edge
 
       - name: Typecheck & Build Web Bundle
         shell: bash
@@ -67,10 +54,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
 
       - name: Setup Rust toolchain
@@ -85,7 +72,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
+          npm ci
           npm run build:app
 
       - name: Compile Rust Tauri backend
@@ -105,10 +92,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
 
       - name: Setup JDK 21 (Required by Tauri v2 Gradle 9 + AGP 9)
@@ -175,7 +162,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
+          npm ci
           npm run build:app
 
       - name: Initialize Tauri Android target & compile Debug APK
@@ -187,27 +174,3 @@ jobs:
           fi
           chmod +x src-tauri/gen/android/gradlew 2>/dev/null || true
           npm run tauri -- android build --apk --debug --target aarch64 --ci
-
-  auto-merge:
-    name: "Auto-Merge PR (All 3 Platforms Gated)"
-    needs: [web, desktop-rust, android-tauri]
-    if: github.event_name == 'pull_request' && !cancelled() && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: Verify all 3 platform gates and auto-merge
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          WEB_RES: ${{ needs.web.result }}
-          DESKTOP_RES: ${{ needs.desktop-rust.result }}
-          ANDROID_RES: ${{ needs.android-tauri.result }}
-        run: |
-          echo "Web Gate: $WEB_RES | Desktop Gate: $DESKTOP_RES | Android Gate: $ANDROID_RES"
-          if [ "$WEB_RES" != "success" ] || [ "$DESKTOP_RES" != "success" ] || [ "$ANDROID_RES" != "success" ]; then
-            echo "::error::One or more platform gates failed. Auto-merge blocked."
-            exit 1
-          fi
-          gh pr merge "$PR_NUMBER" --auto --squash --delete-branch || gh pr merge "$PR_NUMBER" --squash --delete-branch || true

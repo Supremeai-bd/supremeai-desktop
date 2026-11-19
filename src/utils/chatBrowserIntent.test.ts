@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { mockEdgePreferences, testEdgeEnv, testSessionHeaders } from '../test/edgePreferences';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildBrowserSystemContext,
   detectBrowserNavigationIntent,
@@ -106,10 +107,12 @@ describe('Cloudflare Pages Edge Parity Functions', () => {
   });
 
   it('handles /api/auth/totp/status and /api/auth/totp/setup via WebCrypto', async () => {
+    using _fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(mockEdgePreferences());
     const statusReq = new Request(
-      'https://supremeai-studio.pages.dev/api/auth/totp/status?userEmail=admin@supremeai.bd'
+      'https://supremeai-studio.pages.dev/api/auth/totp/status?userEmail=admin@supremeai.bd',
+      { headers: testSessionHeaders }
     );
-    const statusRes = await totpHandler({ request: statusReq, env: {} });
+    const statusRes = await totpHandler({ request: statusReq, env: testEdgeEnv });
     expect(statusRes.status).toBe(200);
     const statusJson = (await statusRes.json()) as { accountName?: string; issuer?: string };
     expect(statusJson.accountName).toBe('admin@supremeai.bd');
@@ -117,10 +120,10 @@ describe('Cloudflare Pages Edge Parity Functions', () => {
 
     const setupReq = new Request('https://supremeai-studio.pages.dev/api/auth/totp/setup', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...testSessionHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ userEmail: 'admin@supremeai.bd' }),
     });
-    const setupRes = await totpHandler({ request: setupReq, env: {} });
+    const setupRes = await totpHandler({ request: setupReq, env: testEdgeEnv });
     expect(setupRes.status).toBe(200);
     const setupJson = (await setupRes.json()) as {
       success?: boolean;

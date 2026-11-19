@@ -1,9 +1,8 @@
-# SupremeAI Desktop Application
+# SupremeAI Studio
 
-Native **Windows, macOS, and Linux** desktop workstation for **SupremeAI**, built with **Tauri v2 + Rust + React 19 + TypeScript + Three.js**.
+SupremeAI Studio shares a React and TypeScript frontend across the web app, Tauri desktop app, and Tauri Android app. The local web server uses Express and Vite; the deployed web app uses Cloudflare Pages Functions.
 
-[![Desktop CI/CD Release](https://github.com/Supremeai-bd/supremeai-desktop/actions/workflows/desktop-release.yml/badge.svg)](https://github.com/Supremeai-bd/supremeai-desktop/actions/workflows/desktop-release.yml)
-[![Latest Release](https://img.shields.io/github/v/release/Supremeai-bd/supremeai-desktop)](https://github.com/Supremeai-bd/supremeai-desktop/releases)
+[![CI](https://github.com/Supremeai-bd/supremeai-public/actions/workflows/ci.yml/badge.svg)](https://github.com/Supremeai-bd/supremeai-public/actions/workflows/ci.yml) [Releases](https://github.com/Supremeai-bd/supremeai-public/releases)
 
 ---
 
@@ -74,37 +73,39 @@ immediately instead of waiting for the whole reply.
 | **Frontend UI** | React 19, TypeScript, Vite |
 | **3D Rendering** | Three.js |
 | **Markdown & Formatting** | ReactMarkdown, remark-gfm |
-| **Installer Formats** | Windows NSIS (`.exe`), WiX (`.msi`), macOS (`.dmg`), Linux (`.AppImage`) |
+| **Installer Formats** | Windows NSIS (`.exe`), WiX (`.msi`), macOS (`.dmg`) and Linux (`.AppImage`) when built for those platforms |
 
 ---
 
-## 🚀 Development & Build
+## Development quickstart
 
-### Prerequisites
-- Node.js (v20+) & npm
-- Rust toolchain (latest stable): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- Platform C++ build tools (Visual Studio C++ build tools on Windows)
-
-### Commands
+Use **Node.js 24 (24.12 or later)** and **npm**. `package-lock.json` is the canonical lockfile. Use `npm ci` for a clean checkout and `npm install` only when intentionally updating dependencies.
 
 ```bash
-# Install dependencies
-npm install
-
-# Start local dev server & Tauri window
-npm run tauri:dev
-
-# Typecheck and build frontend
-npm run build
-
-# Build production installers (.exe, .msi)
-npm run tauri:build
+npm ci
+cp .env.example .env
+npm run dev
 ```
 
----
+Open `http://localhost:3000`. On PowerShell, use `Copy-Item .env.example .env`. Set `PORT` or pass `npm run dev -- --port 3001` if port 3000 is busy.
 
-## 📦 Automated Release Pipeline
+- **Mock UI development:** Set `VITE_USE_MOCK=true` in `.env` and restart. Supported services use local fixtures without provider credentials. This is not a full offline backend: integrations without fixtures can still require a live service. Mock mode is disabled in production builds.
+- **Live backend:** Leave `VITE_USE_MOCK=false` and set `SUPREMEAI_BACKEND_URL` to your backend to use the same-origin API proxy; unset, it uses the configured SupremeAI default. Set `VITE_API_BASE_URL` only if the browser should call a separate API origin directly. Add provider keys, Firebase settings, or Supabase settings only for the integrations you are testing. Never put server credentials in `VITE_*` variables; Vite exposes those values to the browser.
 
-GitHub Actions automatically builds and publishes releases:
-- **On Tag Push**: Push a tag matching `v*` (e.g., `v0.1.0`) to build production artifacts and create a GitHub Release.
-- **Manual Trigger**: Go to **Actions** -> **SupremeAI Desktop Build & Release** -> **Run workflow**, choose whether to create a GitHub Release and specify the version tag.
+| Task | Command |
+| --- | --- |
+| Run the JavaScript tests | `npm test` |
+| Typecheck all Cloudflare Pages Functions | `npm run typecheck:edge` |
+| Build the production web bundle | `npm run build:web` |
+| Build the shared desktop/Android UI bundle | `npm run build:app` |
+| Run the desktop app locally | `npm run tauri:dev` |
+| Build desktop installers for your host | `npm run tauri:build` |
+| Initialize and run Tauri Android | `npm run tauri:android:init`, then `npm run tauri:android:dev` |
+
+Native development requires stable Rust and the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/). Android also requires the Android SDK/NDK and JDK 21. See [Monorepo Architecture](MONOREPO_ARCHITECTURE.md) for repository layout.
+
+## CI and releases
+
+[Unified CI](.github/workflows/ci.yml) checks the web bundle and Pages Functions, builds and tests the Windows Rust backend, and builds an Android debug APK. Configure these jobs as required checks on `main`; the workflow does not merge pull requests.
+
+[Build & Release](.github/workflows/release-all.yml) publishes the web bundle, Windows NSIS/MSI installers, and Android APKs. It does not currently publish macOS or Linux installers. The web job deploys to Cloudflare Pages when its secrets are configured. Versioned releases use `v<package.json version>`; run `npm run version:sync` after changing the package version to update the Tauri and Cargo configuration. The release workflow generates `latest-desktop.json` from the Windows installer it actually publishes. A manual run with no tag uses the rolling `latest` prerelease when publishing is enabled.

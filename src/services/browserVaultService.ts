@@ -759,6 +759,11 @@ function persistScheduledTasks(tasks: BrowserScheduledTask[]): void {
   }
 }
 
+function scheduledTaskHeaders(): Record<string, string> {
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('supremeai_access_token') : null;
+  return { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+}
+
 export async function saveScheduledTask(params: {
   title?: string;
   targetUrl: string;
@@ -803,7 +808,7 @@ export async function saveScheduledTask(params: {
     try {
       await fetch('/api/workspace/browser-schedules', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: scheduledTaskHeaders(),
         body: JSON.stringify(created),
       });
     } catch {
@@ -828,7 +833,7 @@ export async function toggleScheduledTask(id: string): Promise<BrowserScheduledT
     try {
       await fetch('/api/workspace/browser-schedules', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: scheduledTaskHeaders(),
         body: JSON.stringify({ id, enabled: toggledEnabled }),
       });
     } catch {
@@ -861,7 +866,7 @@ export async function markScheduledTaskRun(
     try {
       await fetch('/api/workspace/browser-schedules', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: scheduledTaskHeaders(),
         body: JSON.stringify({
           id,
           lastRunAt: now,
@@ -884,6 +889,7 @@ export async function deleteScheduledTask(id: string): Promise<BrowserScheduledT
     try {
       await fetch(`/api/workspace/browser-schedules?id=${encodeURIComponent(id)}`, {
         method: 'DELETE',
+        headers: scheduledTaskHeaders(),
       });
     } catch {
       // Ignore offline backend errors

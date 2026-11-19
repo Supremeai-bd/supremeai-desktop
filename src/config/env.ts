@@ -4,6 +4,8 @@
  * with seamless Mock-to-Real API adapter switching.
  */
 
+import { version } from '../../package.json';
+
 export interface AppEnvConfig {
   isMockEnabled: boolean;
   apiBaseUrl: string;
@@ -65,7 +67,7 @@ export const env: AppEnvConfig = {
   supabaseUrl: getEnvString('VITE_SUPABASE_URL', ''),
   gatewayUrl: getEnvString('VITE_GATEWAY_URL', '/v1'),
   mcpTowerUrl: getEnvString('VITE_MCP_TOWER_URL', '/api/mcp-tower'),
-  version: 'v2.4.0-prod',
+  version: `v${version}`,
 };
 
 /**

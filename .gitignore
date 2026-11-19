@@ -37,3 +37,6 @@ src-tauri/gen/android/local.properties
 src-tauri/gen/android/*.keystore
 src-tauri/gen/android/*.jks
 
+
+# Generated GitHub release asset
+/latest-desktop.json
