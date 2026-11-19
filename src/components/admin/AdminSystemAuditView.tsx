@@ -86,7 +86,7 @@ export const AdminSystemAuditView: React.FC<AdminSystemAuditViewProps> = ({ audi
       });
 
     adminService
-      .fetchGitHubRuns('Supremeai-bd/supremeai-frontend')
+      .fetchGitHubRuns('Supremeai-bd/supremeai-public')
       .then((res) => {
         if (!active) return;
         const latest = res?.runs?.[0];
@@ -283,7 +283,7 @@ export const AdminSystemAuditView: React.FC<AdminSystemAuditViewProps> = ({ audi
               </div>
               <div>
                 <h3 className="text-xs font-bold text-slate-900 dark:text-white">
-                  Supremeai-bd / supremeai-frontend
+                  Supremeai-bd / supremeai-public
                 </h3>
                 <p className="text-[11px] text-slate-400">{t.studioFrontendSubtitle}</p>
               </div>
@@ -302,7 +302,7 @@ export const AdminSystemAuditView: React.FC<AdminSystemAuditViewProps> = ({ audi
                 rel="noreferrer"
                 className="text-blue-600 dark:text-blue-400 hover:underline truncate"
               >
-                Supremeai-bd/supremeai-frontend
+                Supremeai-bd/supremeai-public
               </a>
             </div>
             <div className="flex justify-between gap-2">

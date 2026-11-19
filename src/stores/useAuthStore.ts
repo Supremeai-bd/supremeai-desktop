@@ -30,8 +30,10 @@ interface AuthState {
   isTwoFactorModalOpen: boolean;
   isAdminAuthModalOpen: boolean;
   isLoading: boolean;
+  authError: string | null;
 
   // Actions
+  clearAuthError: () => void;
   login: (email: string, password: string) => Promise<boolean>;
   signup: (
     name: string,
@@ -113,6 +115,9 @@ export const useAuthStore = create<AuthState>((set, get) => {
     isTwoFactorModalOpen: false,
     isAdminAuthModalOpen: false,
     isLoading: false,
+    authError: null,
+
+    clearAuthError: () => set({ authError: null }),
 
     restoreSession: async () => {
       // Integration plan Phase 1: validate any stored session against the
@@ -196,7 +201,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
     },
 
     login: async (email: string, password: string) => {
-      set({ isLoading: true });
+      set({ isLoading: true, authError: null });
       try {
         const res = await authService.login(email, password);
         localStorage.setItem(AUTH_USER_KEY, JSON.stringify(res.user));
@@ -210,6 +215,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
           impersonatedCustomer: null,
           currentRole: roleToSet,
           isLoading: false,
+          authError: null,
         });
 
         const existingSettings = useCustomerStore.getState().userSettings;
@@ -241,8 +247,9 @@ export const useAuthStore = create<AuthState>((set, get) => {
           .catch(() => {});
         return true;
       } catch (err: unknown) {
-        set({ isLoading: false });
-        toast.error('Sign In Failed', err instanceof Error ? err.message : 'Invalid credentials');
+        const message = err instanceof Error ? err.message : 'Invalid email address or password.';
+        set({ isLoading: false, authError: message });
+        toast.error('Sign In Failed', message);
         return false;
       }
     },
@@ -254,7 +261,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
       plan: string = 'Free',
       isDeveloperEligible: boolean = false
     ) => {
-      set({ isLoading: true });
+      set({ isLoading: true, authError: null });
       try {
         const res = await authService.signup(name, email, password, plan, isDeveloperEligible);
         localStorage.setItem(AUTH_USER_KEY, JSON.stringify(res.user));
@@ -268,6 +275,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
           impersonatedCustomer: null,
           currentRole: roleToSet,
           isLoading: false,
+          authError: null,
         });
 
         useCustomerStore.getState().updateSettings(
@@ -289,11 +297,9 @@ export const useAuthStore = create<AuthState>((set, get) => {
           .catch(() => {});
         return true;
       } catch (err: unknown) {
-        set({ isLoading: false });
-        toast.error(
-          'Registration Failed',
-          err instanceof Error ? err.message : 'Could not create account'
-        );
+        const message = err instanceof Error ? err.message : 'Could not create account';
+        set({ isLoading: false, authError: message });
+        toast.error('Registration Failed', message);
         return false;
       }
     },
@@ -316,6 +322,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
         currentRole: 'user',
         isTwoFactorModalOpen: false,
         isAdminAuthModalOpen: false,
+        authError: null,
       });
       if (!silentToast) {
         toast.info('Signed Out', 'You have been safely signed out of SupremeAI Studio.');

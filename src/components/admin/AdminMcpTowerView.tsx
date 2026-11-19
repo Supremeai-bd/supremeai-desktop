@@ -185,8 +185,11 @@ export const AdminMcpTowerView: React.FC<AdminMcpTowerViewProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Real-time microservice orchestration, live MCP JSON-RPC tool caller, and daemon
-                  reboot controls for{' '}
+                  Real-time microservice orchestration, live MCP JSON-RPC tool caller (
+                  <span className="font-mono text-slate-700 dark:text-slate-300">
+                    supremeai-mcp-tower-live.onrender.com/mcp
+                  </span>
+                  ), and daemon reboot controls for{' '}
                   <span className="font-mono text-slate-700 dark:text-slate-300">
                     Supremeai-bd/supremeai
                   </span>
@@ -343,6 +346,39 @@ export const AdminMcpTowerView: React.FC<AdminMcpTowerViewProps> = ({
             provenance={mcpToolsProvenance}
             subtitle={`${mcpTools.length} live MCP tools discovered via JSON-RPC tools/list`}
           />
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              1-Click Diagnostics:
+            </span>
+            {[
+              { name: 'status', args: '{}' },
+              { name: 'system_health', args: '{}' },
+              { name: 'system_parity_audit', args: '{}' },
+              { name: 'agent_status', args: '{}' },
+              { name: 'bridge_work', args: '{"action":"list"}' },
+            ].map((preset) => (
+              <button
+                key={preset.name}
+                type="button"
+                onClick={() => {
+                  setSelectedToolName(preset.name);
+                  setToolArgsJson(preset.args);
+                  setToolParseError(null);
+                  void runMcpTool(
+                    preset.name,
+                    JSON.parse(preset.args),
+                    false,
+                    authUser?.email
+                  );
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-blue-500 text-xs font-mono text-slate-700 dark:text-slate-200 cursor-pointer transition-colors"
+              >
+                <Play className="w-3 h-3 text-emerald-500" />
+                <span>{preset.name}</span>
+              </button>
+            ))}
+          </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
             {/* Tool Catalog List */}

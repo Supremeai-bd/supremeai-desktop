@@ -176,7 +176,7 @@ export const ECOSYSTEM_NODES: ServiceNodeDef[] = [
     name: 'Studio UI',
     platform: 'Cloudflare',
     role: 'Zero-Admin Web Workspace, 3D Avatar & AI Studio Cockpit',
-    codebasePath: 'supremeai-frontend (Satellite)',
+    codebasePath: 'src/ (Monorepo SSOT · supremeai-public)',
     port: 'HTTPS Edge',
     healthPath: '/',
     category: 'edge',

@@ -372,4 +372,10 @@ export const controlCenterService = {
       }
     );
   },
+
+  async fetchEcosystemDiagnostics(fresh: boolean = false) {
+    return requestJson<import('../types/controlCenter').EcosystemDiagnosticsReport>(
+      `/api/admin/control-plane/ecosystem-diagnostics${fresh ? '?fresh=1' : ''}`
+    );
+  },
 };

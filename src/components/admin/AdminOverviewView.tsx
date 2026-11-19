@@ -58,9 +58,12 @@ export const AdminOverviewView: React.FC<AdminOverviewViewProps> = ({
     unclaimedBridgeCount,
     healthSnapshot,
     trafficSummary,
+    ecosystemDiagnostics,
     isDiagnosing,
+    isLoadingDiagnostics,
     loadOverview,
     loadServiceHealth,
+    loadEcosystemDiagnostics,
     runDeepDiagnose,
     generateDagPlan,
   } = useControlCenterStore();
@@ -74,7 +77,8 @@ export const AdminOverviewView: React.FC<AdminOverviewViewProps> = ({
   useEffect(() => {
     loadOverview();
     loadServiceHealth(false);
-  }, [loadOverview, loadServiceHealth]);
+    loadEcosystemDiagnostics();
+  }, [loadOverview, loadServiceHealth, loadEcosystemDiagnostics]);
 
   useEffect(() => {
     setMaintenanceMessage(config.maintenanceMessage);
@@ -283,6 +287,95 @@ export const AdminOverviewView: React.FC<AdminOverviewViewProps> = ({
               <span>{link.label}</span>
               <ArrowUpRight className="w-3 h-3 text-slate-400" />
             </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Live MCP Diagnostics & SSOT Maintainability Card */}
+      <div className="p-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Radio className="w-4 h-4 text-emerald-500" />
+              <span>Live MCP Diagnostics & SSOT Maintainability</span>
+              {ecosystemDiagnostics && (
+                <span
+                  className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${
+                    ecosystemDiagnostics.mcpReachable
+                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                      : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
+                  }`}
+                >
+                  {ecosystemDiagnostics.mcpReachable ? 'MCP LIVE' : 'MCP UNREACHABLE'}
+                </span>
+              )}
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono truncate">
+              {ecosystemDiagnostics?.mcpEndpoint || 'https://supremeai-mcp-tower-live.onrender.com/mcp'} · SSOT:{' '}
+              {ecosystemDiagnostics?.ssotConfigPath || 'src/config/platformEndpoints.ts'}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => loadEcosystemDiagnostics()}
+              disabled={isLoadingDiagnostics}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-medium cursor-pointer disabled:opacity-60"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingDiagnostics ? 'animate-spin' : ''}`} />
+              <span>{isLoadingDiagnostics ? 'Auditing...' : 'Refresh MCP Audit'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigateTab('mcp-tower')}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold cursor-pointer"
+            >
+              <span>MCP Tower</span>
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {(ecosystemDiagnostics?.findings || []).map((finding) => (
+            <div
+              key={finding.id}
+              className="p-3.5 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 space-y-1.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  {finding.surface}
+                </span>
+                <span
+                  className={`inline-flex items-center gap-1 text-[11px] font-semibold ${
+                    finding.severity === 'healthy'
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : finding.severity === 'warning'
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-rose-600 dark:text-rose-400'
+                  }`}
+                >
+                  {finding.severity === 'healthy' ? (
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                  ) : finding.severity === 'warning' ? (
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                  ) : (
+                    <XCircle className="w-3.5 h-3.5" />
+                  )}
+                  {finding.severity.toUpperCase()}
+                </span>
+              </div>
+              <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                {finding.title}
+              </div>
+              <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-snug">
+                {finding.detail}
+              </p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug pt-0.5">
+                <span className="font-semibold">Action:</span> {finding.recommendation}
+              </p>
+            </div>
           ))}
         </div>
       </div>

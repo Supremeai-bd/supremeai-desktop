@@ -42,14 +42,29 @@ export interface ControlPlaneRouterDeps {
   isIpBlocked: (req: Request) => boolean;
 }
 
-const MCP_AGENT_KEY = process.env.MCP_TOWER_AGENT_KEY?.trim() || 'federated_bridge_agent';
+import {
+  DEFAULT_BACKEND_ORIGIN,
+  DEFAULT_MCP_AGENT_KEY,
+  DEFAULT_MCP_TOWER_ORIGIN,
+  KNOWN_RENDER_SERVICE_IDS,
+  resolveMcpRpcCandidates,
+} from '../config/platformEndpoints';
 
-const MCP_TOWER_URL =
-  process.env.SUPREMEAI_MCP_TOWER_URL?.trim() ||
-  `https://supremeai-mcp-tower.onrender.com/agents/${MCP_AGENT_KEY}/mcp`;
+const MCP_AGENT_KEY = process.env.MCP_TOWER_AGENT_KEY?.trim() || DEFAULT_MCP_AGENT_KEY;
+
+const MCP_TOWER_ORIGIN =
+  process.env.SUPREMEAI_MCP_TOWER_ORIGIN?.trim() || DEFAULT_MCP_TOWER_ORIGIN;
+
+const MCP_TOWER_CANDIDATES = resolveMcpRpcCandidates(
+  process.env.SUPREMEAI_MCP_TOWER_URL?.trim() || MCP_TOWER_ORIGIN,
+  MCP_AGENT_KEY
+);
+
+const MCP_TOWER_URL = MCP_TOWER_CANDIDATES[0];
+let activeMcpEndpointUrl = MCP_TOWER_URL;
 
 const BACKEND_GATEWAY_URL =
-  process.env.SUPREMEAI_BACKEND_URL?.trim() || 'https://supremeai-api-ulw0.onrender.com';
+  process.env.SUPREMEAI_BACKEND_URL?.trim() || DEFAULT_BACKEND_ORIGIN;
 
 const GITHUB_COMMITS_URL = 'https://api.github.com/repos/Supremeai-bd/supremeai/commits/main';
 
@@ -128,43 +143,56 @@ async function ensureMcpSession(forceRefresh: boolean = false): Promise<string |
     headers['Authorization'] = `Bearer ${process.env.SUPREMEAI_TOWER_TOKEN.trim()}`;
   }
 
-  const initRes = await mcpFetchWithTimeout(MCP_TOWER_URL, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: {
-        protocolVersion: '2024-11-05',
-        capabilities: {},
-        clientInfo: { name: 'supremeai-studio-control-plane', version: '2.4.0' },
-      },
-    }),
-  });
+  let lastError: Error | null = null;
+  for (const candidateUrl of MCP_TOWER_CANDIDATES) {
+    try {
+      const initRes = await mcpFetchWithTimeout(candidateUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'supremeai-studio-control-plane', version: '2.5.0' },
+          },
+        }),
+      });
 
-  if (!initRes.ok) {
-    throw new Error(`MCP initialize returned HTTP ${initRes.status}`);
+      if (!initRes.ok) {
+        lastError = new Error(`MCP initialize returned HTTP ${initRes.status}`);
+        if (initRes.status === 404 || initRes.status === 403) continue;
+        throw lastError;
+      }
+
+      const sessionId = initRes.headers.get('mcp-session-id');
+      if (!sessionId) {
+        lastError = new Error('MCP server did not issue an mcp-session-id header.');
+        continue;
+      }
+
+      cachedMcpSessionId = sessionId;
+      activeMcpEndpointUrl = candidateUrl;
+
+      await mcpFetchWithTimeout(
+        candidateUrl,
+        {
+          method: 'POST',
+          headers: { ...headers, 'mcp-session-id': sessionId },
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+        },
+        4000
+      ).catch(() => {});
+
+      return sessionId;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
   }
 
-  const sessionId = initRes.headers.get('mcp-session-id');
-  if (!sessionId) {
-    throw new Error('MCP server did not issue an mcp-session-id header.');
-  }
-
-  cachedMcpSessionId = sessionId;
-
-  await mcpFetchWithTimeout(
-    MCP_TOWER_URL,
-    {
-      method: 'POST',
-      headers: { ...headers, 'mcp-session-id': sessionId },
-      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
-    },
-    4000
-  ).catch(() => {});
-
-  return sessionId;
+  throw lastError || new Error('All MCP Tower RPC endpoints unreachable.');
 }
 
 async function callMcpJsonRpc(
@@ -184,7 +212,7 @@ async function callMcpJsonRpc(
     }
 
     const res = await mcpFetchWithTimeout(
-      MCP_TOWER_URL,
+      activeMcpEndpointUrl,
       {
         method: 'POST',
         headers,
@@ -271,10 +299,11 @@ function getRenderServiceId(serviceName: string): string | null {
     'supremeai-api': 'RENDER_SERVICE_ID_API',
     'supremeai-browser': 'RENDER_SERVICE_ID_BROWSER',
     'supremeai-mcp-tower': 'RENDER_SERVICE_ID_MCP',
+    'supremeai-mcp-tower-live': 'RENDER_SERVICE_ID_MCP',
   };
   const envVar = map[serviceName];
   const val = envVar ? process.env[envVar]?.trim() : '';
-  return val || null;
+  return val || KNOWN_RENDER_SERVICE_IDS[serviceName] || null;
 }
 
 type RenderDeployInfo = {
@@ -825,7 +854,7 @@ export function registerControlPlaneRoutes(app: Express, deps: ControlPlaneRoute
     },
     {
       id: 'crawl_02',
-      targetUrl: 'https://supremeai-mcp-tower.onrender.com/health',
+      targetUrl: `${DEFAULT_MCP_TOWER_ORIGIN}/health`,
       engine: 'cdp-playwright',
       pagesCrawled: 1,
       status: 'completed',
@@ -2011,5 +2040,135 @@ export function registerControlPlaneRoutes(app: Express, deps: ControlPlaneRoute
       req
     );
     res.json({ success: true, cronTasks });
+  });
+
+  // --- Live MCP Tower Ecosystem & Maintainability Diagnostics ---
+  app.get('/api/admin/control-plane/ecosystem-diagnostics', async (req: Request, res: Response) => {
+    const forceFresh = req.query.fresh === '1';
+    const findings: Array<{
+      id: string;
+      severity: 'critical' | 'warning' | 'healthy';
+      surface: string;
+      title: string;
+      detail: string;
+      recommendation: string;
+    }> = [];
+
+    let liveStatusPayload: any = null;
+    let parityPayload: any = null;
+    let mcpReachable = false;
+
+    try {
+      const [statusRes, parityRes] = await Promise.all([
+        callMcpJsonRpc(
+          'tools/call',
+          { name: 'status', arguments: { include_services: true } },
+          8000
+        ).catch(() => null),
+        callMcpJsonRpc(
+          'tools/call',
+          { name: 'system_parity_audit', arguments: { fresh: forceFresh } },
+          8500
+        ).catch(() => null),
+      ]);
+
+      const extractJson = (rpcResult: any) => {
+        const txt = rpcResult?.content?.[0]?.text;
+        if (typeof txt !== 'string') return null;
+        try {
+          return JSON.parse(txt);
+        } catch {
+          return null;
+        }
+      };
+
+      liveStatusPayload = extractJson(statusRes);
+      parityPayload = extractJson(parityRes);
+      mcpReachable = Boolean(liveStatusPayload || parityPayload);
+    } catch {
+      mcpReachable = false;
+    }
+
+    const activeServiceChecks = liveStatusPayload?.services || liveStatusPayload?.health?.services || {};
+    const redisInfo = liveStatusPayload?.redis || parityPayload?.redis || null;
+    const renderMcpServiceId = process.env.RENDER_SERVICE_ID_MCP?.trim();
+
+    if (!mcpReachable) {
+      findings.push({
+        id: 'mcp-unreachable',
+        severity: 'warning',
+        surface: 'MCP Tower',
+        title: 'Live MCP Tower RPC unreachable from current runtime',
+        detail: `Target endpoint: ${activeMcpEndpointUrl}`,
+        recommendation: 'Verify SUPREMEAI_MCP_TOWER_URL / SUPREMEAI_TOWER_TOKEN or Render cold start.',
+      });
+    } else {
+      findings.push({
+        id: 'mcp-live',
+        severity: 'healthy',
+        surface: 'MCP Tower',
+        title: 'Live MCP Tower connected',
+        detail: `Active endpoint: ${activeMcpEndpointUrl}`,
+        recommendation: 'Keep centralized endpoint constants in src/config/platformEndpoints.ts.',
+      });
+    }
+
+    if (redisInfo?.activeProvider === 'secondary' || String(redisInfo?.failover || '').includes('secondary')) {
+      findings.push({
+        id: 'redis-failover',
+        severity: 'warning',
+        surface: 'Upstash Redis',
+        title: 'Upstash primary nearing quota — running on secondary failover',
+        detail: 'MCP telemetry indicates Redis auto-rotated onto secondary slot.',
+        recommendation: 'Clear stale session/rate-limit keys or raise primary Upstash quota.',
+      });
+    }
+
+    if (!renderMcpServiceId) {
+      findings.push({
+        id: 'render-mcp-id-missing',
+        severity: 'warning',
+        surface: 'Render Deploy Parity',
+        title: 'RENDER_SERVICE_ID_MCP not configured in local env',
+        detail: 'render-api ID srv-dbappass728c7396p580 is registered in SSOT; MCP service ID requires env binding.',
+        recommendation: 'Set RENDER_SERVICE_ID_MCP and RENDER_API_KEY for one-click redeploy & SHA verification.',
+      });
+    }
+
+    const driftServices = Array.isArray(parityPayload?.services)
+      ? parityPayload.services.filter((s: any) => s?.drift || s?.shaMismatch || s?.status === 'degraded')
+      : [];
+    for (const svc of driftServices.slice(0, 4)) {
+      findings.push({
+        id: `parity-${String(svc.name || svc.service || 'service')}`,
+        severity: svc.status === 'down' ? 'critical' : 'warning',
+        surface: 'Release Parity',
+        title: `${svc.name || svc.service}: ${svc.drift ? 'Commit SHA drift' : svc.status}`,
+        detail: `Live SHA ${svc.liveSha || svc.deployedSha || 'unknown'} vs Target ${svc.targetSha || svc.expectedSha || 'main'}`,
+        recommendation: 'Open Release Gate & Parity to redeploy drifted Render services to main HEAD.',
+      });
+    }
+
+    if (activeServiceChecks?.cloudflare?.status === 'critical') {
+      findings.push({
+        id: 'cf-worker-route',
+        severity: 'warning',
+        surface: 'Cloudflare Edge',
+        title: 'Cloudflare worker status check flagged 404 deployment identity mismatch',
+        detail: 'Ensure CF_ACCOUNT_ID / Pages worker route matches supremeai-studio.pages.dev.',
+        recommendation: 'Deploy functions/* via Cloudflare Pages CI and confirm /api/releases/latest.',
+      });
+    }
+
+    res.json({
+      checkedAt: new Date().toISOString(),
+      mcpEndpoint: activeMcpEndpointUrl,
+      mcpReachable,
+      backendGateway: BACKEND_GATEWAY_URL,
+      ssotConfigPath: 'src/config/platformEndpoints.ts',
+      findings,
+      rawStatus: liveStatusPayload,
+      rawParity: parityPayload,
+    });
   });
 }

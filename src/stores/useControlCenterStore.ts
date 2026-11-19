@@ -30,6 +30,7 @@ import type {
   McpHealthMonitorSnapshot,
   ProactiveHealthThresholds,
   GatewayTrafficPoint,
+  EcosystemDiagnosticsReport,
 } from '../types/controlCenter';
 
 export interface SafetyGatePrompt {
@@ -524,6 +525,8 @@ interface ControlCenterState {
   } | null;
   isLoadingHealth: boolean;
   isProbingHealth: boolean;
+  ecosystemDiagnostics: EcosystemDiagnosticsReport | null;
+  isLoadingDiagnostics: boolean;
 
   // Safety Gate Modal
   pendingGate: SafetyGatePrompt | null;
@@ -531,6 +534,7 @@ interface ControlCenterState {
 
   // Actions
   loadOverview: () => Promise<void>;
+  loadEcosystemDiagnostics: (fresh?: boolean) => Promise<void>;
   setSafetyMode: (mode: ControlPlaneSafetyMode, actor?: string) => Promise<void>;
   runDeepDiagnose: (service?: string, intent?: string, actor?: string) => Promise<void>;
   loadMcpTools: (refresh?: boolean) => Promise<void>;
@@ -630,6 +634,8 @@ export const useControlCenterStore = create<ControlCenterState>((set, get) => ({
   trafficSummary: null,
   isLoadingHealth: false,
   isProbingHealth: false,
+  ecosystemDiagnostics: null,
+  isLoadingDiagnostics: false,
 
   pendingGate: null,
   isExecutingGate: false,
@@ -674,6 +680,20 @@ export const useControlCenterStore = create<ControlCenterState>((set, get) => ({
       // Keep prior state cleanly
     } finally {
       set({ isLoadingOverview: false });
+    }
+  },
+
+  loadEcosystemDiagnostics: async (fresh = false) => {
+    set({ isLoadingDiagnostics: true });
+    try {
+      const report = await controlCenterService.fetchEcosystemDiagnostics(fresh);
+      if (report && Array.isArray(report.findings)) {
+        set({ ecosystemDiagnostics: report });
+      }
+    } catch {
+      // Keep previous diagnostics snapshot
+    } finally {
+      set({ isLoadingDiagnostics: false });
     }
   },
 

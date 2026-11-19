@@ -18,6 +18,7 @@ import type {
 } from '../../../services/gitExportService';
 import { toast } from '../../../stores/useToastStore';
 import { saveGitTokens } from '../../../services/gitExportService';
+import { PlatformDownloadsCard } from '../../common/PlatformDownloadsCard';
 
 interface AccountSettingsPanelProps {
   isAdminEligible: boolean;
@@ -257,6 +258,9 @@ export const AccountSettingsPanel: React.FC<AccountSettingsPanelProps> = ({
             </button>
           </div>
         )}
+
+        {/* Cross-Platform App & Installer Shortcuts */}
+        <PlatformDownloadsCard variant="full" />
 
         {/* Account Session Sign Out Card */}
         <div className="p-5 rounded-2xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200/80 dark:border-rose-900/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs">

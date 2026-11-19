@@ -46,7 +46,9 @@ class ApiClient {
   }
 
   private isAuthEndpoint(endpoint: string): boolean {
-    return /^\/api\/v1\/auth\/(login|register|guest|logout|refresh)(\?|$)/.test(endpoint);
+    return /^\/api(?:\/v1)?\/auth\/(?:login|register|signup|guest|logout|refresh|verify-2fa|totp(?:\/[^?]+)?)(?:\?|$)/.test(
+      endpoint
+    );
   }
 
   private isAdminEndpoint(endpoint: string): boolean {

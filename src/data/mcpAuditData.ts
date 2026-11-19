@@ -1,11 +1,13 @@
+import { DEFAULT_MCP_TOWER_ORIGIN, DEFAULT_MCP_AGENT_KEY } from '../config/platformEndpoints';
+
 export const REPO = 'Supremeai-bd/supremeai';
 export const REPO_URL = `https://github.com/${REPO}`;
 export const REVISION = 'acbdc50045fa1162f444a2a84a8ea50a37d21602';
 export const SHORT_REVISION = REVISION.slice(0, 7);
 export const SNAPSHOT_DATE = 'Nov 17, 2026';
 export const SNAPSHOT_TIME = '22:21 UTC';
-export const TOWER_URL = 'https://supremeai-mcp-tower.onrender.com';
-export const TOWER_ENDPOINT = `${TOWER_URL}/agents/manus_niloyjoy7/mcp`;
+export const TOWER_URL = DEFAULT_MCP_TOWER_ORIGIN;
+export const TOWER_ENDPOINT = `${TOWER_URL}/agents/${DEFAULT_MCP_AGENT_KEY}/mcp`;
 export const HEALTH_RESOURCE = 'control-tower://system/health';
 export const GATEWAY_HEALTH = 'https://supremeai-api-ulw0.onrender.com/healthz';
 export const MCP_PROTOCOL = '2025-11-25';

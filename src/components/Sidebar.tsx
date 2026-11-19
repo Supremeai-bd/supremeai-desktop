@@ -24,9 +24,12 @@ import {
   ChevronDown,
   ChevronRight,
   Brain,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { ChatSession, RolePersona, AuthUser } from '../types';
 import { ThemeControlPopover } from './theme/ThemeControlPopover';
+import { PlatformDownloadsCard } from './common/PlatformDownloadsCard';
 import { useI18n } from '../utils/i18n';
 import { useFederationStore } from '../stores/useFederationStore';
 import { useAuthStore } from '../stores/useAuthStore';
@@ -88,6 +91,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [inlineLoginOpen, setInlineLoginOpen] = useState(false);
   const [inlineEmail, setInlineEmail] = useState('');
   const [inlinePassword, setInlinePassword] = useState('');
+  const [showInlinePassword, setShowInlinePassword] = useState(false);
   const [inlineError, setInlineError] = useState('');
   const [showMoreWorkspace, setShowMoreWorkspace] = useState(false);
   const [memoryTopicsCount, setMemoryTopicsCount] = useState(() => loadUserMemory().recentTopics.length);
@@ -106,8 +110,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       setInlineLoginOpen(false);
       setInlineEmail('');
       setInlinePassword('');
+      setShowInlinePassword(false);
     } else {
-      setInlineError('Invalid credentials. Please check and try again.');
+      const storeErr = useAuthStore.getState().authError;
+      setInlineError(storeErr || 'Invalid credentials. Please check and try again.');
     }
   };
 
@@ -565,6 +571,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Streamlined Profile, Theme & Ops Console Footer */}
         <div className="p-2.5 border-t border-slate-200/80 dark:border-slate-800/80 bg-white/40 dark:bg-slate-900/40 space-y-2">
+          <PlatformDownloadsCard variant="compact" />
           {isGuest ? (
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-1.5">
@@ -625,15 +632,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     placeholder="Email address"
                     className="w-full px-2.5 py-1.5 rounded-lg text-xs border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[var(--theme-accent)]"
                   />
-                  <input
-                    type="password"
-                    required
-                    autoComplete="current-password"
-                    value={inlinePassword}
-                    onChange={(e) => setInlinePassword(e.target.value)}
-                    placeholder="Password"
-                    className="w-full px-2.5 py-1.5 rounded-lg text-xs border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[var(--theme-accent)]"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showInlinePassword ? 'text' : 'password'}
+                      required
+                      autoComplete="current-password"
+                      value={inlinePassword}
+                      onChange={(e) => setInlinePassword(e.target.value)}
+                      placeholder="Password"
+                      className="w-full pl-2.5 pr-8 py-1.5 rounded-lg text-xs border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[var(--theme-accent)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowInlinePassword((v) => !v)}
+                      aria-label={showInlinePassword ? 'Hide password' : 'Show password'}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    >
+                      {showInlinePassword ? (
+                        <EyeOff className="w-3.5 h-3.5" />
+                      ) : (
+                        <Eye className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
                   {inlineError && (
                     <p className="text-[10px] text-rose-500 dark:text-rose-400 px-0.5">
                       {inlineError}

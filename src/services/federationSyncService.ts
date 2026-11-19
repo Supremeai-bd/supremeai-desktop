@@ -905,7 +905,7 @@ export class FederationSyncEngine {
     return {
       exportedAt: new Date(this.now()).toISOString(),
       repository: 'Supremeai-bd/supremeai',
-      studio: 'Supremeai-bd/supremeai-frontend',
+      studio: 'Supremeai-bd/supremeai-public',
       intervalMultiplier: this.intervalMultiplier,
       pulse: this.getPulse(),
       sources: this.getSnapshots().map((snapshot) => {

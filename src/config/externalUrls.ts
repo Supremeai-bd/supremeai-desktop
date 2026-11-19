@@ -48,11 +48,20 @@ export const EXTERNAL_URLS = {
   githubOrgBase: getEnvVar('VITE_GITHUB_ORG_URL', 'https://github.com/Supremeai-bd'),
   githubFrontendRepo: getEnvVar(
     'VITE_GITHUB_FRONTEND_REPO',
-    'https://github.com/Supremeai-bd/supremeai-frontend'
+    'https://github.com/Supremeai-bd/supremeai-public'
+  ),
+  githubPublicRepo: getEnvVar(
+    'VITE_GITHUB_PUBLIC_REPO',
+    'https://github.com/Supremeai-bd/supremeai-public'
   ),
   githubBackendRepo: getEnvVar(
     'VITE_GITHUB_BACKEND_REPO',
     'https://github.com/Supremeai-bd/supremeai'
+  ),
+  webStudioUrl: getEnvVar('VITE_WEB_STUDIO_URL', 'https://supremeai-studio.pages.dev'),
+  mcpTowerUrl: getEnvVar(
+    'VITE_MCP_TOWER_URL',
+    'https://supremeai-mcp-tower-live.onrender.com/mcp'
   ),
 };
 

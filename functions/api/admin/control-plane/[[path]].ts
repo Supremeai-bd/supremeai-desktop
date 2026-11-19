@@ -440,6 +440,61 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     return jsonEdgeResponse({ services: [], telegramLogs: [], crons: [] }, 200, request);
   }
 
+  if (sub === 'ecosystem-diagnostics') {
+    let statusPayload: any = null;
+    let parityPayload: any = null;
+    try {
+      const [statusRes, parityRes] = await Promise.all([
+        callMcpTowerRpc(env, 'tools/call', { name: 'status', arguments: { include_services: true } }, 7500).catch(
+          () => null
+        ),
+        callMcpTowerRpc(env, 'tools/call', { name: 'system_parity_audit', arguments: {} }, 8000).catch(() => null),
+      ]);
+      const parseRpc = (r: any) => {
+        const txt = r?.content?.[0]?.text;
+        if (typeof txt !== 'string') return null;
+        try {
+          return JSON.parse(txt);
+        } catch {
+          return null;
+        }
+      };
+      statusPayload = parseRpc(statusRes);
+      parityPayload = parseRpc(parityRes);
+    } catch {
+      // Non-fatal fallback
+    }
+
+    const findings = [
+      {
+        id: 'mcp-live',
+        severity: statusPayload || parityPayload ? 'healthy' : 'warning',
+        surface: 'MCP Tower',
+        title:
+          statusPayload || parityPayload
+            ? 'Live MCP Tower connected'
+            : 'Live MCP Tower unreachable from edge adapter',
+        detail: `Active endpoint: ${mcpEndpoint}`,
+        recommendation: 'Endpoint is centralized in src/config/platformEndpoints.ts.',
+      },
+    ];
+
+    return jsonEdgeResponse(
+      {
+        checkedAt: new Date().toISOString(),
+        mcpEndpoint,
+        mcpReachable: Boolean(statusPayload || parityPayload),
+        backendGateway: upstreamOrigin,
+        ssotConfigPath: 'src/config/platformEndpoints.ts',
+        findings,
+        rawStatus: statusPayload,
+        rawParity: parityPayload,
+      },
+      200,
+      request
+    );
+  }
+
   // Generic action/mutation acknowledgment for edge-handled control plane actions
   return jsonEdgeResponse(
     {

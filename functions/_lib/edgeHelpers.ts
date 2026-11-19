@@ -5,7 +5,7 @@ export interface PagesContext {
 }
 
 export const DEFAULT_UPSTREAM_ORIGIN = 'https://supremeai-api-ulw0.onrender.com';
-export const DEFAULT_MCP_TOWER_ORIGIN = 'https://supremeai-mcp-tower.onrender.com';
+export const DEFAULT_MCP_TOWER_ORIGIN = 'https://supremeai-mcp-tower-live.onrender.com';
 
 export function resolveUpstreamOrigin(env?: Record<string, string | undefined>): string {
   return (env?.SUPREMEAI_BACKEND_URL || DEFAULT_UPSTREAM_ORIGIN).replace(/\/+$/, '');
@@ -15,12 +15,20 @@ export function resolveMcpTowerOrigin(env?: Record<string, string | undefined>):
   return (env?.SUPREMEAI_MCP_TOWER_ORIGIN || DEFAULT_MCP_TOWER_ORIGIN).replace(/\/+$/, '');
 }
 
-export function resolveMcpRpcUrl(env?: Record<string, string | undefined>): string {
-  if (env?.SUPREMEAI_MCP_TOWER_URL?.trim()) {
-    return env.SUPREMEAI_MCP_TOWER_URL.trim();
-  }
+export function resolveMcpRpcCandidates(env?: Record<string, string | undefined>): string[] {
+  const origin = resolveMcpTowerOrigin(env);
   const agentKey = env?.MCP_TOWER_AGENT_KEY?.trim() || 'federated_bridge_agent';
-  return `${resolveMcpTowerOrigin(env)}/agents/${agentKey}/mcp`;
+  if (env?.SUPREMEAI_MCP_TOWER_URL?.trim()) {
+    const custom = env.SUPREMEAI_MCP_TOWER_URL.trim();
+    return custom.endsWith('/mcp') && !custom.includes('/agents/')
+      ? [custom, `${origin}/agents/${agentKey}/mcp`]
+      : [custom, `${origin}/mcp`];
+  }
+  return [`${origin}/agents/${agentKey}/mcp`, `${origin}/mcp`];
+}
+
+export function resolveMcpRpcUrl(env?: Record<string, string | undefined>): string {
+  return resolveMcpRpcCandidates(env)[0];
 }
 
 const DEFAULT_ALLOWED_EDGE_ORIGINS = [
@@ -378,7 +386,7 @@ export async function callMcpTowerRpc(
   params: Record<string, unknown> = {},
   timeoutMs: number = 8500
 ): Promise<any> {
-  const rpcUrl = resolveMcpRpcUrl(env);
+  const candidates = resolveMcpRpcCandidates(env);
   const baseHeaders: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json, text/event-stream',
@@ -387,73 +395,86 @@ export async function callMcpTowerRpc(
     baseHeaders['Authorization'] = `Bearer ${env.SUPREMEAI_TOWER_TOKEN.trim()}`;
   }
 
-  const initRes = await fetchWithTimeout(
-    rpcUrl,
-    {
-      method: 'POST',
-      headers: baseHeaders,
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2024-11-05',
-          capabilities: {},
-          clientInfo: { name: 'supremeai-pages-edge-bridge', version: '2.4.0' },
+  let lastError: Error | null = null;
+  for (const rpcUrl of candidates) {
+    try {
+      const initRes = await fetchWithTimeout(
+        rpcUrl,
+        {
+          method: 'POST',
+          headers: baseHeaders,
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2024-11-05',
+              capabilities: {},
+              clientInfo: { name: 'supremeai-pages-edge-bridge', version: '2.5.0' },
+            },
+          }),
         },
-      }),
-    },
-    6500
-  );
+        6500
+      );
 
-  if (!initRes.ok) {
-    throw new Error(`MCP initialize returned HTTP ${initRes.status}`);
+      if (!initRes.ok) {
+        if (initRes.status === 404 || initRes.status === 403) {
+          lastError = new Error(`MCP initialize returned HTTP ${initRes.status}`);
+          continue;
+        }
+        throw new Error(`MCP initialize returned HTTP ${initRes.status}`);
+      }
+
+      const sid = initRes.headers.get('mcp-session-id');
+      const callHeaders: Record<string, string> = {
+        ...baseHeaders,
+        ...(sid ? { 'mcp-session-id': sid } : {}),
+      };
+
+      await fetchWithTimeout(
+        rpcUrl,
+        {
+          method: 'POST',
+          headers: callHeaders,
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+        },
+        3000
+      ).catch(() => {});
+
+      const rpcRes = await fetchWithTimeout(
+        rpcUrl,
+        {
+          method: 'POST',
+          headers: callHeaders,
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: Date.now(),
+            method,
+            params,
+          }),
+        },
+        timeoutMs
+      );
+
+      if (!rpcRes.ok) {
+        throw new Error(`MCP ${method} failed with HTTP ${rpcRes.status}`);
+      }
+
+      const rawText = await rpcRes.text();
+      const parsed = parseMcpSseOrJson(rawText);
+      if (!parsed) {
+        throw new Error(`Unparseable MCP payload for ${method}`);
+      }
+      if (parsed.error) {
+        throw new Error(parsed.error.message || JSON.stringify(parsed.error));
+      }
+      return parsed.result;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
   }
 
-  const sid = initRes.headers.get('mcp-session-id');
-  const callHeaders: Record<string, string> = {
-    ...baseHeaders,
-    ...(sid ? { 'mcp-session-id': sid } : {}),
-  };
-
-  await fetchWithTimeout(
-    rpcUrl,
-    {
-      method: 'POST',
-      headers: callHeaders,
-      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
-    },
-    3000
-  ).catch(() => {});
-
-  const rpcRes = await fetchWithTimeout(
-    rpcUrl,
-    {
-      method: 'POST',
-      headers: callHeaders,
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: Date.now(),
-        method,
-        params,
-      }),
-    },
-    timeoutMs
-  );
-
-  if (!rpcRes.ok) {
-    throw new Error(`MCP ${method} failed with HTTP ${rpcRes.status}`);
-  }
-
-  const rawText = await rpcRes.text();
-  const parsed = parseMcpSseOrJson(rawText);
-  if (!parsed) {
-    throw new Error(`Unparseable MCP payload for ${method}`);
-  }
-  if (parsed.error) {
-    throw new Error(parsed.error.message || JSON.stringify(parsed.error));
-  }
-  return parsed.result;
+  throw lastError || new Error('All MCP Tower RPC endpoints unreachable');
 }
 
 // --- WebCrypto RFC 6238 TOTP Helpers ---

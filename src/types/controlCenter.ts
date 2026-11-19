@@ -382,3 +382,24 @@ export interface McpHealthMonitorSnapshot {
     avgLatencyMs: number;
   }>;
 }
+
+export interface EcosystemFinding {
+  id: string;
+  severity: 'critical' | 'warning' | 'healthy';
+  surface: string;
+  title: string;
+  detail: string;
+  recommendation: string;
+}
+
+export interface EcosystemDiagnosticsReport {
+  checkedAt: string;
+  mcpEndpoint: string;
+  mcpReachable: boolean;
+  backendGateway: string;
+  ssotConfigPath: string;
+  findings: EcosystemFinding[];
+  rawStatus?: unknown;
+  rawParity?: unknown;
+}
+

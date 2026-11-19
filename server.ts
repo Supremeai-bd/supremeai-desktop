@@ -32,6 +32,14 @@ import {
   type TtsAudioChunk,
 } from './src/utils/speechUtils';
 import type { LiveVoiceName } from './src/hooks/useLiveVoiceSession';
+import {
+  DEFAULT_BACKEND_ORIGIN,
+  DEFAULT_MCP_TOWER_ORIGIN,
+  DEFAULT_WEB_STUDIO_URL,
+  GITHUB_MONOREPO_SLUG,
+  GITHUB_PUBLIC_REPO_SLUG,
+} from './src/config/platformEndpoints';
+import { DEFAULT_RELEASE_MANIFEST } from './src/config/releaseDownloads';
 import QRCode from 'qrcode';
 import { buildOtpAuthUri, generateTotpSecret, verifyTotpToken } from './src/server/totp';
 import { PLAN_CATALOG, TOPUP_PACKAGES, getPlanSpec } from './src/config/plans';
@@ -1566,6 +1574,45 @@ async function startServer() {
     },
   ];
 
+  // GET /api/mcp-tower/health - Live MCP Tower reachability probe (mirrors Edge Function parity)
+  app.get('/api/mcp-tower/health', async (_req: Request, res: Response) => {
+    const mcpOrigin = (process.env.MCP_TOWER_URL || DEFAULT_MCP_TOWER_ORIGIN)
+      .trim()
+      .replace(/\/agents\/[^/]+\/mcp$/i, '')
+      .replace(/\/mcp$/i, '')
+      .replace(/\/+$/, '');
+    const started = Date.now();
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        const probe = await fetch(`${mcpOrigin}/health`, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        });
+        const latencyMs = Date.now() - started;
+        res.json({
+          status: probe.ok ? (latencyMs > 2500 ? 'degraded' : 'ok') : 'degraded',
+          httpStatus: probe.status,
+          latencyMs,
+          endpoint: mcpOrigin,
+          checkedAt: new Date().toISOString(),
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (err: unknown) {
+      res.status(200).json({
+        status: 'unreachable',
+        latencyMs: Date.now() - started,
+        endpoint: mcpOrigin,
+        error: err instanceof Error ? err.message : 'Probe timed out',
+        checkedAt: new Date().toISOString(),
+      });
+    }
+  });
+
   // GET /api/mcp-tower/services - Live services from MCP Tower & HTTP health probes
   app.get('/api/mcp-tower/services', async (req: Request, res: Response) => {
     try {
@@ -2109,8 +2156,31 @@ async function startServer() {
   ): { sub: string; email: string; iat: number; exp: number; role?: string } | null =>
     verifySessionToken(token, TOKEN_SIGNING_SECRET);
 
+  const DEV_USERS_FILE = path.join(os.tmpdir(), 'supremeai_dev_users.json');
+  const loadDevUsersDb = (): ServerUser[] => {
+    if (isProduction) return [];
+    try {
+      if (fs.existsSync(DEV_USERS_FILE)) {
+        const raw = fs.readFileSync(DEV_USERS_FILE, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // Ignore corrupt dev cache
+    }
+    return [];
+  };
+  const persistDevUsersDb = (users: ServerUser[]) => {
+    if (isProduction) return;
+    try {
+      fs.writeFileSync(DEV_USERS_FILE, JSON.stringify(users, null, 2), { mode: 0o600 });
+    } catch {
+      // Non-fatal in read-only environments
+    }
+  };
+
   // Seeded local user credentials removed; real accounts register or authenticate via upstream gateway.
-  let usersDb: ServerUser[] = [];
+  let usersDb: ServerUser[] = loadDevUsersDb();
 
   let customerDirectory: ServerCustomerRecord[] = isProduction
     ? []
@@ -2868,6 +2938,27 @@ async function startServer() {
     };
   };
 
+  const setRefreshTokenCookie = (req: Request, res: Response, refreshToken: string) => {
+    res.cookie('supremeai_refresh_token', refreshToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isHttpsRequest(req),
+      path: '/api',
+      maxAge: REFRESH_TOKEN_TTL_MS,
+    });
+  };
+
+  const setAdminSessionCookie = (req: Request, res: Response, token: string) => {
+    activeAdminSessions.set(token, Date.now() + ADMIN_SESSION_TTL_MS);
+    res.cookie('supremeai_admin_session', token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isHttpsRequest(req),
+      path: '/api/admin',
+      maxAge: ADMIN_SESSION_TTL_MS,
+    });
+  };
+
   const handleLoginRequest = async (req: Request, res: Response) => {
     if (isIpBlocked(req)) {
       res.status(403).json({ error: 'Access blocked by platform WAF firewall.' });
@@ -2902,15 +2993,10 @@ async function startServer() {
       });
       activeAuthSessions.set(token, user.id);
       if (safeUser.isAdminEligible) {
-        activeAdminSessions.set(token, Date.now() + ADMIN_SESSION_TTL_MS);
-        res.cookie('supremeai_admin_session', token, {
-          httpOnly: true,
-          sameSite: 'lax',
-          secure: isHttpsRequest(req),
-          path: '/api/admin',
-          maxAge: ADMIN_SESSION_TTL_MS,
-        });
+        setAdminSessionCookie(req, res, token);
       }
+      const refreshToken = issueLocalRefreshToken(user.id);
+      setRefreshTokenCookie(req, res, refreshToken);
       res.json({
         success: true,
         user: safeUser,
@@ -2921,7 +3007,7 @@ async function startServer() {
         adminEmails: safeUser.adminEmails,
         token,
         access_token: token,
-        refresh_token: issueLocalRefreshToken(user.id),
+        refresh_token: refreshToken,
         expires_in: 3600,
       });
       return;
@@ -2930,12 +3016,12 @@ async function startServer() {
     // Fallback to upstream database-backed gateway if configured and user is not in local usersDb
     if (!user) {
       const remoteGatewayUrl =
-        process.env.SUPREMEAI_BACKEND_URL?.trim() || 'https://supremeai-api-ulw0.onrender.com';
+        process.env.SUPREMEAI_BACKEND_URL?.trim() || DEFAULT_BACKEND_ORIGIN;
       try {
         const upstreamRes = await fetch(`${remoteGatewayUrl}/api/v1/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          signal: AbortSignal.timeout(5500),
+          signal: AbortSignal.timeout(12000),
           body: JSON.stringify({ username: cleanEmail, email: cleanEmail, password }),
         });
 
@@ -2999,6 +3085,26 @@ async function startServer() {
             adminEmails: rbac.adminEmails,
           };
 
+          const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+          upstreamTokenAdminCache.set(tokenHash, {
+            email: cleanEmail,
+            isAdmin: rbac.isAdminEligible,
+            tier: safeUser.plan as PlanTier,
+            expiresAt: Date.now() + 60_000,
+          });
+          if (rbac.isAdminEligible) {
+            setAdminSessionCookie(req, res, token);
+          }
+          const upstreamSetCookie = upstreamRes.headers.get('set-cookie');
+          if (upstreamSetCookie) {
+            res.append('Set-Cookie', upstreamSetCookie);
+          }
+          const upstreamRefreshToken =
+            upstreamData.refresh_token || upstreamData.refreshToken || undefined;
+          if (upstreamRefreshToken) {
+            setRefreshTokenCookie(req, res, String(upstreamRefreshToken));
+          }
+
           res.json({
             success: true,
             user: safeUser,
@@ -3009,18 +3115,49 @@ async function startServer() {
             adminEmails: safeUser.adminEmails,
             token,
             access_token: token,
+            ...(upstreamRefreshToken ? { refresh_token: upstreamRefreshToken } : {}),
+            expires_in: upstreamData.expires_in || 3600,
           });
           return;
         }
-      } catch {
-        // Upstream gateway unavailable; fall through to standard 401
+
+        if (upstreamRes.status >= 500) {
+          res.status(502).json({
+            error:
+              upstreamData?.detail ||
+              upstreamData?.error ||
+              upstreamData?.message ||
+              `Authentication gateway returned HTTP ${upstreamRes.status}. Please retry in a few seconds.`,
+          });
+          return;
+        }
+
+        const upstreamErrMsg =
+          upstreamData?.detail ||
+          upstreamData?.error ||
+          upstreamData?.message ||
+          (upstreamRes.status === 403
+            ? 'Access forbidden or account requires verification.'
+            : upstreamRes.status === 429
+              ? 'Too many sign-in attempts. Please wait a moment and try again.'
+              : 'Invalid email address or credentials.');
+        res.status(upstreamRes.status || 401).json({ error: String(upstreamErrMsg) });
+        return;
+      } catch (err: unknown) {
+        const isAbort = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+        res.status(isAbort ? 504 : 502).json({
+          error: isAbort
+            ? 'Authentication gateway timed out while waking up. Please try signing in again.'
+            : 'Unable to reach authentication gateway. Check network or register a local workspace account.',
+        });
+        return;
       }
     }
 
-    res.status(401).json({ error: 'Invalid email address or credentials.' });
+    res.status(401).json({ error: 'Invalid email address or password.' });
   };
 
-  const handleSignupRequest = (req: Request, res: Response) => {
+  const handleSignupRequest = async (req: Request, res: Response) => {
     if (isIpBlocked(req)) {
       res.status(403).json({ error: 'Access blocked by platform WAF firewall.' });
       return;
@@ -3037,9 +3174,6 @@ async function startServer() {
       email,
       username,
       password,
-      plan = 'Pro',
-      isDeveloperEligible,
-      workspaceFocus,
     } = req.body || {};
     const rawEmail = email || username;
     const cleanName = String(name || (rawEmail ? String(rawEmail).split('@')[0] : '')).trim();
@@ -3055,11 +3189,87 @@ async function startServer() {
       return;
     }
 
+    const remoteGatewayUrl =
+      process.env.SUPREMEAI_BACKEND_URL?.trim() || DEFAULT_BACKEND_ORIGIN;
+    if (remoteGatewayUrl) {
+      try {
+        const upstreamRes = await fetch(`${remoteGatewayUrl}/api/v1/auth/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          signal: AbortSignal.timeout(12000),
+          body: JSON.stringify({
+            name: cleanName,
+            email: cleanEmail,
+            username: cleanEmail,
+            password,
+          }),
+        });
+        const upstreamData: any = await upstreamRes.json().catch(() => null);
+        if (upstreamRes.ok && upstreamData && (upstreamData.access_token || upstreamData.token)) {
+          const remoteUser =
+            upstreamData.user && typeof upstreamData.user === 'object'
+              ? upstreamData.user
+              : upstreamData;
+          const rbac = resolveRbacUserProfile(cleanEmail, {
+            rbacRole: remoteUser.rbacRole || remoteUser.role,
+            isAdminEligible: Boolean(remoteUser.isAdminEligible ?? remoteUser.is_admin_eligible),
+          });
+          const token = String(upstreamData.access_token || upstreamData.token);
+          const safeUser = {
+            id: String(remoteUser.id || remoteUser.user_id || `usr_${Date.now()}`),
+            user_id: String(remoteUser.id || remoteUser.user_id || `usr_${Date.now()}`),
+            name: String(remoteUser.name || cleanName),
+            email: cleanEmail,
+            avatar: cleanName.charAt(0).toUpperCase(),
+            role: rbac.role,
+            rbacRole: rbac.rbacRole,
+            isAdminEligible: rbac.isAdminEligible,
+            adminEmailMatched: rbac.adminEmailMatched,
+            isDeveloperEligible: rbac.isDeveloperEligible,
+            adminUserId: rbac.adminUserId,
+            plan: remoteUser.plan || 'Free',
+            createdAt: String(remoteUser.createdAt || new Date().toISOString().slice(0, 10)),
+            adminEmails: rbac.adminEmails,
+          };
+          if (rbac.isAdminEligible) setAdminSessionCookie(req, res, token);
+          const upstreamRefreshToken =
+            upstreamData.refresh_token || upstreamData.refreshToken || undefined;
+          if (upstreamRefreshToken) setRefreshTokenCookie(req, res, String(upstreamRefreshToken));
+          res.json({
+            success: true,
+            user: safeUser,
+            role: safeUser.role,
+            rbacRole: safeUser.rbacRole,
+            isAdminEligible: safeUser.isAdminEligible,
+            adminEmailMatched: safeUser.adminEmailMatched,
+            adminEmails: safeUser.adminEmails,
+            token,
+            access_token: token,
+            ...(upstreamRefreshToken ? { refresh_token: upstreamRefreshToken } : {}),
+            expires_in: upstreamData.expires_in || 3600,
+          });
+          return;
+        }
+        if (upstreamRes.status === 409 || upstreamRes.status === 400 || upstreamRes.status === 422) {
+          res.status(upstreamRes.status).json({
+            error:
+              upstreamData?.detail ||
+              upstreamData?.error ||
+              upstreamData?.message ||
+              (upstreamRes.status === 409
+                ? 'An account with this email already exists.'
+                : 'Invalid signup details provided.'),
+          });
+          return;
+        }
+      } catch {
+        // Fall through to persisted local registration when upstream registration route is unavailable
+      }
+    }
+
     const existingCust = customerDirectory.find((c) => c.email.toLowerCase() === cleanEmail);
     const rbac = resolveRbacUserProfile(cleanEmail, undefined, existingCust);
     const isAdmin = rbac.isAdminEligible;
-    // Public self-signup always starts on Free (or Enterprise only for verified admin emails);
-    // paid tiers & developer roles must be granted via verified billing/admin flows.
     const devEligible = isAdmin || Boolean(existingCust?.isDeveloperEligible);
     const assignedPlan: PlanTier = isAdmin
       ? 'Enterprise'
@@ -3080,6 +3290,7 @@ async function startServer() {
     };
 
     usersDb.push(newUser);
+    persistDevUsersDb(usersDb);
 
     if (!existingCust) {
       const planSpec = getPlanSpec(assignedPlan);
@@ -3111,8 +3322,18 @@ async function startServer() {
     );
 
     const safeUser = buildSafeAuthUser(newUser, existingCust);
-    const token = signLocalSessionToken({ sub: newUser.id, email: newUser.email, iat: Date.now() });
+    const token = signLocalSessionToken({
+      sub: newUser.id,
+      email: newUser.email,
+      iat: Date.now(),
+      role: safeUser.isAdminEligible ? 'admin' : 'user',
+    });
     activeAuthSessions.set(token, newUser.id);
+    if (safeUser.isAdminEligible) {
+      setAdminSessionCookie(req, res, token);
+    }
+    const refreshToken = issueLocalRefreshToken(newUser.id);
+    setRefreshTokenCookie(req, res, refreshToken);
     res.json({
       success: true,
       user: safeUser,
@@ -3123,7 +3344,7 @@ async function startServer() {
       adminEmails: safeUser.adminEmails,
       token,
       access_token: token,
-      refresh_token: issueLocalRefreshToken(newUser.id),
+      refresh_token: refreshToken,
       expires_in: 3600,
     });
   };
@@ -3153,15 +3374,16 @@ async function startServer() {
       }
 
       const customerRec = customerDirectory.find((c) => c.email.toLowerCase() === emailToResolve);
+      const tokenClaimsAdmin = verifiedPayload?.role === 'admin';
       const effectiveUser: ServerUser = matchedUser || {
         id: verifiedPayload?.sub || `usr_${Date.now()}`,
         name: customerRec?.name || emailToResolve.split('@')[0],
         email: emailToResolve,
         passwordHash: '',
-        role: 'user',
-        isAdminEligible: false,
-        isDeveloperEligible: Boolean(customerRec?.isDeveloperEligible),
-        plan: customerRec?.tier || 'Pro',
+        role: tokenClaimsAdmin ? 'admin' : 'user',
+        isAdminEligible: tokenClaimsAdmin,
+        isDeveloperEligible: tokenClaimsAdmin || Boolean(customerRec?.isDeveloperEligible),
+        plan: customerRec?.tier || (tokenClaimsAdmin ? 'Enterprise' : 'Pro'),
         createdAt: customerRec?.joinedDate || new Date().toISOString().slice(0, 10),
       };
 
@@ -3177,12 +3399,12 @@ async function startServer() {
     // Try upstream gateway if bearer token is an upstream JWT
     if (!token.startsWith('tok_') && !token.startsWith('mock_tok_')) {
       const remoteGatewayUrl =
-        process.env.SUPREMEAI_BACKEND_URL?.trim() || 'https://supremeai-api-ulw0.onrender.com';
+        process.env.SUPREMEAI_BACKEND_URL?.trim() || DEFAULT_BACKEND_ORIGIN;
       try {
         const upstreamRes = await fetch(`${remoteGatewayUrl}/api/v1/auth/me`, {
           method: 'GET',
           headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-          signal: AbortSignal.timeout(4500),
+          signal: AbortSignal.timeout(9000),
         });
         if (upstreamRes.ok) {
           const data: any = await upstreamRes.json().catch(() => null);
@@ -3261,7 +3483,7 @@ async function startServer() {
 
   const handleGuestTokenRequest = async (_req: Request, res: Response) => {
     const remoteGatewayUrl =
-      process.env.SUPREMEAI_BACKEND_URL?.trim() || 'https://supremeai-api-ulw0.onrender.com';
+      process.env.SUPREMEAI_BACKEND_URL?.trim() || DEFAULT_BACKEND_ORIGIN;
     try {
       const upstreamRes = await fetch(`${remoteGatewayUrl}/api/v1/auth/guest`, {
         method: 'POST',
@@ -3293,12 +3515,40 @@ async function startServer() {
     });
   };
 
-  const handleRefreshRequest = (req: Request, res: Response) => {
+  const handleRefreshRequest = async (req: Request, res: Response) => {
     const cookies = parseCookieHeader(req.headers.cookie);
     const presented = String(
       req.body?.refresh_token || cookies.supremeai_refresh_token || ''
     ).trim();
     const entry = presented ? activeRefreshTokens.get(presented) : undefined;
+
+    if (!entry && presented && !presented.startsWith('rt_')) {
+      const remoteGatewayUrl =
+        process.env.SUPREMEAI_BACKEND_URL?.trim() || DEFAULT_BACKEND_ORIGIN;
+      try {
+        const upstreamRes = await fetch(`${remoteGatewayUrl}/api/v1/auth/refresh`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            ...(req.headers.cookie ? { Cookie: String(req.headers.cookie) } : {}),
+          },
+          body: JSON.stringify({ refresh_token: presented }),
+          signal: AbortSignal.timeout(9000),
+        });
+        const upstreamData: any = await upstreamRes.json().catch(() => null);
+        if (upstreamRes.ok && upstreamData && (upstreamData.access_token || upstreamData.token)) {
+          const upstreamSetCookie = upstreamRes.headers.get('set-cookie');
+          if (upstreamSetCookie) res.append('Set-Cookie', upstreamSetCookie);
+          const nextRefresh = upstreamData.refresh_token || upstreamData.refreshToken;
+          if (nextRefresh) setRefreshTokenCookie(req, res, String(nextRefresh));
+          res.json(upstreamData);
+          return;
+        }
+      } catch {
+        // Fall through to 401
+      }
+    }
 
     if (!entry || entry.expiresAt <= Date.now()) {
       if (presented) activeRefreshTokens.delete(presented);
@@ -3336,13 +3586,7 @@ async function startServer() {
     // Single-use rotation: the presented refresh token is invalidated.
     activeRefreshTokens.delete(presented);
     const rotatedRefreshToken = issueLocalRefreshToken(user.id);
-    res.cookie('supremeai_refresh_token', rotatedRefreshToken, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: isHttpsRequest(req),
-      path: '/api/v1/auth',
-      maxAge: REFRESH_TOKEN_TTL_MS,
-    });
+    setRefreshTokenCookie(req, res, rotatedRefreshToken);
 
     res.json({
       success: true,
@@ -3384,9 +3628,152 @@ async function startServer() {
     for (const candidate of presentedRefreshTokens) {
       if (candidate) activeRefreshTokens.delete(candidate);
     }
+    res.clearCookie('supremeai_refresh_token', { path: '/api' });
     res.clearCookie('supremeai_refresh_token', { path: '/api/v1/auth' });
     res.clearCookie('supremeai_admin_session', { path: '/api/admin' });
     res.json({ success: true });
+  });
+
+  // Cross-Platform Release Manifest (Web + Desktop EXE + Android APK)
+  let cachedReleaseManifest: { data: typeof DEFAULT_RELEASE_MANIFEST; fetchedAt: number } | null =
+    null;
+
+  app.get('/api/releases/latest', async (_req: Request, res: Response) => {
+    if (cachedReleaseManifest && Date.now() - cachedReleaseManifest.fetchedAt < 5 * 60_000) {
+      res.json(cachedReleaseManifest.data);
+      return;
+    }
+
+    const reposToCheck = [GITHUB_PUBLIC_REPO_SLUG, GITHUB_MONOREPO_SLUG];
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'SupremeAI-Release-Resolver',
+    };
+    if (process.env.GITHUB_READONLY_TOKEN?.trim()) {
+      headers['Authorization'] = `Bearer ${process.env.GITHUB_READONLY_TOKEN.trim()}`;
+    }
+
+    for (const repoSlug of reposToCheck) {
+      try {
+        const ghRes = await fetch(`https://api.github.com/repos/${repoSlug}/releases/latest`, {
+          headers,
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!ghRes.ok) continue;
+        const release = (await ghRes.json().catch(() => null)) as any;
+        const assets: any[] = Array.isArray(release?.assets) ? release.assets : [];
+
+        const manifestAsset = assets.find(
+          (a) => a?.name === 'latest-release.json' || a?.name === 'latest-desktop.json'
+        );
+        if (manifestAsset?.browser_download_url) {
+          const mfRes = await fetch(manifestAsset.browser_download_url, {
+            signal: AbortSignal.timeout(4500),
+          }).catch(() => null);
+          if (mfRes?.ok) {
+            const mf = (await mfRes.json().catch(() => null)) as any;
+            if (mf && mf.version) {
+              const resolved = {
+                version: String(mf.version),
+                tag: String(mf.tag || release.tag_name || 'latest'),
+                repo: repoSlug,
+                publishedAt: String(mf.pub_date || release.published_at || ''),
+                releasePageUrl: String(
+                  mf.downloads?.releasePageUrl ||
+                    release.html_url ||
+                    DEFAULT_RELEASE_MANIFEST.releasePageUrl
+                ),
+                webUrl: String(mf.downloads?.webUrl || DEFAULT_WEB_STUDIO_URL),
+                windowsExeUrl: String(
+                  mf.downloads?.windowsExeUrl ||
+                    mf.platforms?.['windows-x86_64']?.url ||
+                    DEFAULT_RELEASE_MANIFEST.windowsExeUrl
+                ),
+                windowsMsiUrl: String(
+                  mf.downloads?.windowsMsiUrl ||
+                    mf.platforms?.['windows-msi']?.url ||
+                    DEFAULT_RELEASE_MANIFEST.windowsMsiUrl
+                ),
+                androidApkUrl: String(
+                  mf.downloads?.androidApkUrl ||
+                    mf.platforms?.['android-arm64']?.url ||
+                    mf.platforms?.['android-apk']?.url ||
+                    DEFAULT_RELEASE_MANIFEST.androidApkUrl
+                ),
+                androidArmv7ApkUrl: mf.downloads?.androidArmv7ApkUrl
+                  ? String(mf.downloads.androidArmv7ApkUrl)
+                  : undefined,
+                provenance: 'manifest' as const,
+                assets: DEFAULT_RELEASE_MANIFEST.assets,
+              };
+              cachedReleaseManifest = { data: resolved, fetchedAt: Date.now() };
+              res.json(resolved);
+              return;
+            }
+          }
+        }
+
+        const exeAsset = assets.find((a) => String(a?.name || '').endsWith('.exe'));
+        const msiAsset = assets.find((a) => String(a?.name || '').endsWith('.msi'));
+        const arm64Apk =
+          assets.find(
+            (a) =>
+              String(a?.name || '').endsWith('.apk') && /arm64|aarch64/i.test(String(a?.name || ''))
+          ) || assets.find((a) => String(a?.name || '').endsWith('.apk'));
+        const armv7Apk = assets.find(
+          (a) =>
+            String(a?.name || '').endsWith('.apk') && /armv7|armeabi/i.test(String(a?.name || ''))
+        );
+
+        if (exeAsset || arm64Apk) {
+          const tag = String(release.tag_name || 'latest');
+          const resolved = {
+            version: tag.replace(/^v/i, '') || DEFAULT_RELEASE_MANIFEST.version,
+            tag,
+            repo: repoSlug,
+            publishedAt: String(release.published_at || ''),
+            releasePageUrl: String(release.html_url || DEFAULT_RELEASE_MANIFEST.releasePageUrl),
+            webUrl: DEFAULT_WEB_STUDIO_URL,
+            windowsExeUrl: String(
+              exeAsset?.browser_download_url || DEFAULT_RELEASE_MANIFEST.windowsExeUrl
+            ),
+            windowsMsiUrl: String(
+              msiAsset?.browser_download_url || DEFAULT_RELEASE_MANIFEST.windowsMsiUrl
+            ),
+            androidApkUrl: String(
+              arm64Apk?.browser_download_url || DEFAULT_RELEASE_MANIFEST.androidApkUrl
+            ),
+            androidArmv7ApkUrl: armv7Apk?.browser_download_url
+              ? String(armv7Apk.browser_download_url)
+              : undefined,
+            provenance: 'live-github' as const,
+            assets: assets
+              .filter((a) => /\.(exe|msi|apk)$/i.test(String(a?.name || '')))
+              .map((a) => ({
+                platform: String(a.name).endsWith('.exe')
+                  ? ('windows-exe' as const)
+                  : String(a.name).endsWith('.msi')
+                    ? ('windows-msi' as const)
+                    : /armv7|armeabi/i.test(String(a.name))
+                      ? ('android-apk-armv7' as const)
+                      : ('android-apk-arm64' as const),
+                label: String(a.name),
+                fileName: String(a.name),
+                url: String(a.browser_download_url),
+                sizeBytes: typeof a.size === 'number' ? a.size : undefined,
+              })),
+          };
+          cachedReleaseManifest = { data: resolved, fetchedAt: Date.now() };
+          res.json(resolved);
+          return;
+        }
+      } catch {
+        // Try next repo slug
+      }
+    }
+
+    cachedReleaseManifest = { data: DEFAULT_RELEASE_MANIFEST, fetchedAt: Date.now() };
+    res.json(DEFAULT_RELEASE_MANIFEST);
   });
 
   // Client error sink (mirrors functions/api/telemetry/client-error.ts).

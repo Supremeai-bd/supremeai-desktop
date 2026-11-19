@@ -12,6 +12,7 @@ import { useControlCenterStore } from '../../stores/useControlCenterStore';
 import { controlCenterService } from '../../services/controlCenterService';
 import { toast } from '../../stores/useToastStore';
 import { ControlCenterSafetyBar } from './ControlCenterSafetyGateModal';
+import { PlatformDownloadsCard } from '../common/PlatformDownloadsCard';
 
 type SubTab = 'provenance' | 'preflight' | 'pipelines';
 
@@ -90,6 +91,8 @@ export const ControlCenterReleaseGateView: React.FC = () => {
             : 'Comparing Supremeai-bd/supremeai main commit'
         }
       />
+
+      <PlatformDownloadsCard variant="full" showAllPlatforms />
 
       <div className="inline-flex items-center p-1 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
         {[

@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 export type Platform = "tauri" | "extension" | "web";
+export type RuntimeTarget = "web" | "desktop" | "android" | "extension";
 
 // Tauri v2 only exposes the legacy `window.__TAURI__` global when
 // `app.withGlobalTauri` is enabled (it is not, and should not be: it widens the
@@ -10,6 +11,30 @@ export function detectPlatform(): Platform {
   if (typeof window !== "undefined" && isTauri()) return "tauri";
   if (typeof (globalThis as any).acquireVsCodeApi === "function") return "extension";
   return "web";
+}
+
+export function isAndroidDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /android/i.test(navigator.userAgent || "");
+}
+
+export function detectRuntimeTarget(): RuntimeTarget {
+  const platform = detectPlatform();
+  if (platform === "tauri") {
+    return isAndroidDevice() ? "android" : "desktop";
+  }
+  return platform;
+}
+
+export function openExternalDownloadUrl(url: string): void {
+  if (typeof document === "undefined" || !url) return;
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.target = "_blank";
+  anchor.rel = "noopener noreferrer";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
 }
 
 export interface SecureStore {

@@ -12,17 +12,30 @@ import type {
 } from '../types/controlCenter';
 import type { McpTowerService } from '../types';
 
-const MCP_AGENT_KEY = process.env.MCP_TOWER_AGENT_KEY?.trim() || 'federated_bridge_agent';
+import {
+  DEFAULT_BACKEND_ORIGIN,
+  DEFAULT_MCP_AGENT_KEY,
+  DEFAULT_MCP_TOWER_ORIGIN,
+  resolveMcpRpcCandidates,
+} from '../config/platformEndpoints';
 
-const MCP_TOWER_URL =
-  process.env.SUPREMEAI_MCP_TOWER_URL?.trim() ||
-  `https://supremeai-mcp-tower.onrender.com/agents/${MCP_AGENT_KEY}/mcp`;
+const MCP_AGENT_KEY = process.env.MCP_TOWER_AGENT_KEY?.trim() || DEFAULT_MCP_AGENT_KEY;
+
+const MCP_TOWER_ORIGIN =
+  process.env.SUPREMEAI_MCP_TOWER_ORIGIN?.trim() || DEFAULT_MCP_TOWER_ORIGIN;
+
+const MCP_TOWER_CANDIDATES = resolveMcpRpcCandidates(
+  process.env.SUPREMEAI_MCP_TOWER_URL?.trim() || MCP_TOWER_ORIGIN,
+  MCP_AGENT_KEY
+);
+
+const MCP_TOWER_URL = MCP_TOWER_CANDIDATES[0];
 
 const MCP_TOWER_HEALTH_URL =
-  process.env.SUPREMEAI_MCP_HEALTH_URL?.trim() || 'https://supremeai-mcp-tower.onrender.com/health';
+  process.env.SUPREMEAI_MCP_HEALTH_URL?.trim() || `${MCP_TOWER_ORIGIN}/health`;
 
 const BACKEND_GATEWAY_URL =
-  process.env.SUPREMEAI_BACKEND_URL?.trim() || 'https://supremeai-api-ulw0.onrender.com';
+  process.env.SUPREMEAI_BACKEND_URL?.trim() || DEFAULT_BACKEND_ORIGIN;
 
 const GITHUB_COMMITS_URL = 'https://api.github.com/repos/Supremeai-bd/supremeai/commits/main';
 
@@ -32,6 +45,7 @@ const MAX_TRAFFIC_BUCKETS = 24;
 let lastCpuUsage = process.cpuUsage();
 let lastCpuSampleMs = Date.now();
 let cachedSessionId: string | null = null;
+let activeMcpEndpointUrl: string = MCP_TOWER_URL;
 
 let thresholds: ProactiveHealthThresholds = {
   cpuWarnPct: 70,
@@ -296,42 +310,52 @@ async function fetchMcpStatusPayload(): Promise<{
 
   try {
     if (!cachedSessionId) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 7500);
-      try {
-        const res = await fetch(MCP_TOWER_URL, {
-          method: 'POST',
-          headers: baseHeaders,
-          signal: controller.signal,
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'initialize',
-            params: {
-              protocolVersion: '2024-11-05',
-              capabilities: {},
-              clientInfo: { name: 'supremeai-studio-health-monitor', version: '2.4.0' },
-            },
-          }),
-        });
-        const sid = res.headers.get('mcp-session-id');
-        if (!res.ok || !sid) {
-          await initSession().catch(() => {});
-          throw new Error(`MCP handshake returned HTTP ${res.status}`);
+      let handshakeError = 'MCP handshake failed';
+      for (const candidateUrl of MCP_TOWER_CANDIDATES) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 7500);
+        try {
+          const res = await fetch(candidateUrl, {
+            method: 'POST',
+            headers: baseHeaders,
+            signal: controller.signal,
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'initialize',
+              params: {
+                protocolVersion: '2024-11-05',
+                capabilities: {},
+                clientInfo: { name: 'supremeai-studio-health-monitor', version: '2.5.0' },
+              },
+            }),
+          });
+          const sid = res.headers.get('mcp-session-id');
+          if (res.ok && sid) {
+            cachedSessionId = sid;
+            activeMcpEndpointUrl = candidateUrl;
+            await fetch(candidateUrl, {
+              method: 'POST',
+              headers: { ...baseHeaders, 'mcp-session-id': sid },
+              body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+            }).catch(() => {});
+            break;
+          }
+          handshakeError = `MCP handshake returned HTTP ${res.status}`;
+        } catch (err) {
+          handshakeError = err instanceof Error ? err.message : 'MCP handshake network error';
+        } finally {
+          clearTimeout(timer);
         }
-        cachedSessionId = sid;
-        await fetch(MCP_TOWER_URL, {
-          method: 'POST',
-          headers: { ...baseHeaders, 'mcp-session-id': sid },
-          body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
-        }).catch(() => {});
-      } finally {
-        clearTimeout(timer);
+      }
+      if (!cachedSessionId) {
+        await initSession().catch(() => {});
+        throw new Error(handshakeError);
       }
     }
 
     const callRes = await fetchTimedJson(
-      MCP_TOWER_URL,
+      activeMcpEndpointUrl,
       {
         method: 'POST',
         headers: { ...baseHeaders, 'mcp-session-id': cachedSessionId! },

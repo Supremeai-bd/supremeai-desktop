@@ -119,7 +119,7 @@ export interface FederationSource {
 }
 
 export const FEDERATION_REPO = 'Supremeai-bd/supremeai';
-export const FEDERATION_STUDIO_REPO = 'Supremeai-bd/supremeai-frontend';
+export const FEDERATION_STUDIO_REPO = 'Supremeai-bd/supremeai-public';
 
 export const SOURCE_GROUP_META: Record<
   FederationSourceGroup,

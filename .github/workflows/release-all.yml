@@ -339,9 +339,10 @@ jobs:
           echo "is_pre=$is_pre" >> "$GITHUB_OUTPUT"
           echo "title=SupremeAI Studio $tag (Web + Desktop + Android)" >> "$GITHUB_OUTPUT"
 
-      - name: Generate Desktop Release Manifest
+      - name: Generate Unified Release Manifest (Web + Desktop + Android)
         env:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          WEB_STUDIO_URL: https://supremeai-studio.pages.dev
         run: node scripts/desktop-release-manifest.mjs
 
       - name: Publish Single Coordinated GitHub Release
@@ -355,6 +356,7 @@ jobs:
           make_latest: ${{ steps.version.outputs.is_pre == 'false' && 'true' || 'false' }}
           files: |
             latest-desktop.json
+            latest-release.json
             release-artifacts/release-web-bundle/*.tar.gz
             release-artifacts/release-desktop-windows/**/*.exe
             release-artifacts/release-desktop-windows/**/*.msi

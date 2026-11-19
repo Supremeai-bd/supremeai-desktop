@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, Mail, Lock, User, ArrowRight, Sparkles, AlertCircle, X } from 'lucide-react';
+import { ShieldCheck, Mail, Lock, User, ArrowRight, Sparkles, AlertCircle, X, Eye, EyeOff } from 'lucide-react';
 import { AuthUser } from '../../types';
 import { LiveScreenBackdrop } from '../theme/LiveScreenBackdrop';
 import { ThemeControlPopover } from '../theme/ThemeControlPopover';
@@ -27,6 +27,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -35,6 +36,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const fetchConfig = usePlatformStore((s) => s.fetchConfig);
   const login = useAuthStore((s) => s.login);
   const signup = useAuthStore((s) => s.signup);
+  const clearAuthError = useAuthStore((s) => s.clearAuthError);
 
   useEffect(() => {
     fetchConfig();
@@ -44,22 +46,23 @@ export const AuthPage: React.FC<AuthPageProps> = ({
     e.preventDefault();
     setIsLoading(true);
     setErrorMessage(null);
+    clearAuthError();
 
     try {
       if (mode === 'login') {
         const ok = await login(email.trim(), password);
-        const signedInUser = useAuthStore.getState().authUser;
-        if (!ok || !signedInUser) {
-          throw new Error(t.authLoginErrorFallback);
+        const state = useAuthStore.getState();
+        if (!ok || !state.authUser) {
+          throw new Error(state.authError || t.authLoginErrorFallback);
         }
-        onLoginSuccess(signedInUser, localStorage.getItem('supremeai_access_token') || undefined);
+        onLoginSuccess(state.authUser, localStorage.getItem('supremeai_access_token') || undefined);
       } else {
         const ok = await signup(name.trim(), email.trim(), password, 'Free', false);
-        const createdUser = useAuthStore.getState().authUser;
-        if (!ok || !createdUser) {
-          throw new Error(t.authSignupErrorFallback);
+        const state = useAuthStore.getState();
+        if (!ok || !state.authUser) {
+          throw new Error(state.authError || t.authSignupErrorFallback);
         }
-        onLoginSuccess(createdUser, localStorage.getItem('supremeai_access_token') || undefined);
+        onLoginSuccess(state.authUser, localStorage.getItem('supremeai_access_token') || undefined);
       }
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : t.authLoginErrorFallback);
@@ -237,14 +240,23 @@ export const AuthPage: React.FC<AuthPageProps> = ({
               </div>
               <div className="relative">
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   required
+                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full pl-9 pr-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-cyan-500"
+                  className="w-full pl-9 pr-9 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-cyan-500"
                 />
                 <Lock className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-0.5 cursor-pointer"
+                >
+                  {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
               </div>
             </div>
 

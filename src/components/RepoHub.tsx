@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ExternalLink, Copy, Check, FolderGit2, Code2, Layers } from 'lucide-react';
 import { EXTERNAL_URLS } from '../config/externalUrls';
+import { PlatformDownloadsCard } from './common/PlatformDownloadsCard';
 import { useI18n } from '../utils/i18n';
 
 export const RepoHub: React.FC = () => {
@@ -149,6 +150,9 @@ export const RepoHub: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Cross-Platform Release Installers & Web Shortcuts */}
+      <PlatformDownloadsCard variant="full" showAllPlatforms />
 
       {/* Architecture Topology */}
       <div className="bg-white dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl p-5 space-y-4 shadow-xs">

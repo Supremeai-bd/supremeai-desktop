@@ -13,8 +13,8 @@ export interface AppPreferencesState {
 const normalizeLanguage = (lang?: unknown): AppLanguage => (lang === 'bn' ? 'bn' : 'en');
 
 export const useAppPreferencesStore = create<AppPreferencesState>((set, get) => ({
-  language: normalizeLanguage(useCustomerStore.getState().userSettings.language),
-  role: useAuthStore.getState().currentRole,
+  language: normalizeLanguage(useCustomerStore?.getState?.().userSettings?.language),
+  role: useAuthStore?.getState?.().currentRole ?? 'user',
 
   setLanguage: (language, options) => {
     const normalized = normalizeLanguage(language);
@@ -37,16 +37,42 @@ export const useAppPreferencesStore = create<AppPreferencesState>((set, get) => 
   },
 }));
 
-// Keep centralized preferences synchronized whenever auth or customer settings hydrate/reset.
-useCustomerStore.subscribe((state) => {
-  const nextLang = normalizeLanguage(state.userSettings.language);
-  if (useAppPreferencesStore.getState().language !== nextLang) {
-    useAppPreferencesStore.setState({ language: nextLang });
+let listenersAttached = false;
+function attachPreferenceSyncListeners(retries = 5): void {
+  if (listenersAttached) return;
+  if (
+    typeof useCustomerStore?.subscribe !== 'function' ||
+    typeof useAuthStore?.subscribe !== 'function'
+  ) {
+    if (retries > 0) {
+      setTimeout(() => attachPreferenceSyncListeners(retries - 1), 0);
+    }
+    return;
   }
-});
 
-useAuthStore.subscribe((state) => {
-  if (useAppPreferencesStore.getState().role !== state.currentRole) {
-    useAppPreferencesStore.setState({ role: state.currentRole });
+  listenersAttached = true;
+  const initialLang = normalizeLanguage(useCustomerStore.getState()?.userSettings?.language);
+  const initialRole = useAuthStore.getState()?.currentRole ?? 'user';
+  if (
+    useAppPreferencesStore.getState().language !== initialLang ||
+    useAppPreferencesStore.getState().role !== initialRole
+  ) {
+    useAppPreferencesStore.setState({ language: initialLang, role: initialRole });
   }
-});
+
+  useCustomerStore.subscribe((state) => {
+    const nextLang = normalizeLanguage(state.userSettings.language);
+    if (useAppPreferencesStore.getState().language !== nextLang) {
+      useAppPreferencesStore.setState({ language: nextLang });
+    }
+  });
+
+  useAuthStore.subscribe((state) => {
+    if (useAppPreferencesStore.getState().role !== state.currentRole) {
+      useAppPreferencesStore.setState({ role: state.currentRole });
+    }
+  });
+}
+
+// Defer store subscriptions to a microtask so circular imports finish evaluating before listener registration.
+queueMicrotask(() => attachPreferenceSyncListeners());
