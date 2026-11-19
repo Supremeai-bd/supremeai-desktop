@@ -91,13 +91,13 @@ jobs:
           node-version: "22"
           cache: "npm"
 
-      - name: Setup JDK 17
-        uses: actions/setup-java@v4
+      - name: Setup JDK 21 (Required by Tauri v2 Gradle 9 + AGP 9)
+        uses: actions/setup-java@v5
         with:
           distribution: "temurin"
-          java-version: "17"
+          java-version: "21"
 
-      - name: Configure Pre-installed Android SDK & NDK
+      - name: Configure Pre-installed Android SDK, Licenses & NDK
         shell: bash
         run: |
           set -euo pipefail
@@ -117,10 +117,16 @@ jobs:
             SDKMANAGER=$(find "$SDK_DIR/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1 || true)
           fi
 
+          if [ -n "${SDKMANAGER:-}" ]; then
+            yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+            if [ ! -d "$SDK_DIR/platforms/android-37" ]; then
+              "$SDKMANAGER" "platforms;android-37" || true
+            fi
+          fi
+
           NDK_DIR=$(ls -d "$SDK_DIR/ndk/"* 2>/dev/null | sort -V | tail -n 1 || true)
           if [ -z "$NDK_DIR" ]; then
             if [ -n "${SDKMANAGER:-}" ]; then
-              yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
               "$SDKMANAGER" "ndk;27.0.12077973"
               NDK_DIR="$SDK_DIR/ndk/27.0.12077973"
             else
@@ -131,6 +137,7 @@ jobs:
 
           echo "NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "Using Java: $(java -version 2>&1 | head -n 1)"
           echo "Using Android SDK: $SDK_DIR"
           echo "Using Android NDK: $NDK_DIR"
 
