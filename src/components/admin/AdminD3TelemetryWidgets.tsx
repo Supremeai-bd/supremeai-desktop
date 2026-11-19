@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as d3 from 'd3';
+import 'd3-transition';
 import {
   Users,
   TrendingUp,
@@ -635,14 +636,12 @@ export const AdminD3TelemetryWidgets: React.FC<AdminD3TelemetryWidgetsProps> = (
       .text((d) => d.label);
 
     if (chartStyle === 'bars') {
-      g.selectAll('.token-bar')
+      const bars = g.selectAll('.token-bar')
         .data(series)
         .enter()
         .append('rect')
         .attr('x', (d) => xBand(d.key) ?? 0)
         .attr('width', xBand.bandwidth())
-        .attr('y', innerH)
-        .attr('height', 0)
         .attr('rx', 5)
         .attr('fill', (d, idx) => colorForPoint(d, idx === series.length - 1))
         .attr('fill-opacity', (d, idx) =>
@@ -657,11 +656,21 @@ export const AdminD3TelemetryWidgets: React.FC<AdminD3TelemetryWidgetsProps> = (
           const isLast = d.key === series[series.length - 1]?.key;
           d3.select(this).attr('fill-opacity', d.severity !== 'normal' || isLast ? 0.92 : 0.62);
           setHoveredMonth(null);
-        })
-        .transition()
-        .duration(340)
-        .attr('y', (d) => y(d.tokens))
-        .attr('height', (d) => Math.max(2, innerH - y(d.tokens)));
+        });
+
+      if (typeof (bars as any).transition === 'function') {
+        (bars as any)
+          .attr('y', innerH)
+          .attr('height', 0)
+          .transition()
+          .duration(340)
+          .attr('y', (d: any) => y(d.tokens))
+          .attr('height', (d: any) => Math.max(2, innerH - y(d.tokens)));
+      } else {
+        bars
+          .attr('y', (d) => y(d.tokens))
+          .attr('height', (d) => Math.max(2, innerH - y(d.tokens)));
+      }
 
       // Spike triangle callout above anomalous bars
       series
@@ -839,11 +848,21 @@ export const AdminD3TelemetryWidgets: React.FC<AdminD3TelemetryWidgetsProps> = (
       .attr('fill', (d) => d.data.color)
       .style('cursor', 'pointer')
       .on('mouseenter', function (_, d) {
-        d3.select(this).transition().duration(140).attr('d', hoverArc as any);
+        const sel = d3.select(this);
+        if (typeof (sel as any).transition === 'function') {
+          (sel as any).transition().duration(140).attr('d', hoverArc as any);
+        } else {
+          sel.attr('d', hoverArc as any);
+        }
         setHoveredHealthSlice(d.data);
       })
       .on('mouseleave', function () {
-        d3.select(this).transition().duration(140).attr('d', arc as any);
+        const sel = d3.select(this);
+        if (typeof (sel as any).transition === 'function') {
+          (sel as any).transition().duration(140).attr('d', arc as any);
+        } else {
+          sel.attr('d', arc as any);
+        }
         setHoveredHealthSlice(null);
       });
   }, [healthData]);
@@ -913,16 +932,23 @@ export const AdminD3TelemetryWidgets: React.FC<AdminD3TelemetryWidgetsProps> = (
         .attr('fill-opacity', 0.08);
 
       // Value bar
-      g.append('rect')
+      const valueBar = g.append('rect')
         .attr('x', labelW)
         .attr('y', yPos + 7)
-        .attr('width', 0)
         .attr('height', 8)
         .attr('rx', 4)
-        .attr('fill', barColor)
-        .transition()
-        .duration(320)
-        .attr('width', Math.max(4, x(row.latencyMs)));
+        .attr('fill', barColor);
+
+      const targetBarWidth = Math.max(4, x(row.latencyMs));
+      if (typeof (valueBar as any).transition === 'function') {
+        (valueBar as any)
+          .attr('width', 0)
+          .transition()
+          .duration(320)
+          .attr('width', targetBarWidth);
+      } else {
+        valueBar.attr('width', targetBarWidth);
+      }
 
       // Numeric ms label
       g.append('text')

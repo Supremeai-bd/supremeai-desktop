@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as d3 from 'd3';
+import 'd3-transition';
 import {
   AlertTriangle,
   ArrowLeftRight,
@@ -417,16 +418,23 @@ export const AdminMultiAccountProviderHub: React.FC = () => {
         .attr('fill', 'currentColor')
         .attr('fill-opacity', 0.08);
 
-      g.append('rect')
+      const rect = g.append('rect')
         .attr('x', 0)
         .attr('y', yPos + 5)
-        .attr('width', 0)
         .attr('height', 12)
         .attr('rx', 6)
-        .attr('fill', barColor)
-        .transition()
-        .duration(360)
-        .attr('width', Math.max(4, x(item.runway.usagePct)));
+        .attr('fill', barColor);
+
+      const targetWidth = Math.max(4, x(item.runway.usagePct));
+      if (typeof (rect as any).transition === 'function') {
+        (rect as any)
+          .attr('width', 0)
+          .transition()
+          .duration(360)
+          .attr('width', targetWidth);
+      } else {
+        rect.attr('width', targetWidth);
+      }
 
       g.append('text')
         .attr('x', innerW + 8)
