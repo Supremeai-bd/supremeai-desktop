@@ -128,51 +128,123 @@ export const AdminOverviewView: React.FC<AdminOverviewViewProps> = ({
     healthSnapshot?.summary.healthy ?? Math.max(0, services.length - unhealthyServices.length);
   const mcpAlertCount = healthSnapshot?.alerts.length ?? unhealthyServices.length;
 
+  const healthPercent =
+    totalConnectedMcp > 0 ? Math.round((healthyMcpCount / totalConnectedMcp) * 100) : 100;
+  const ringCircumference = 2 * Math.PI * 38;
+
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-8 max-w-7xl mx-auto space-y-6 text-slate-800 dark:text-slate-200">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200/80 dark:border-slate-800 pb-5">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-            {t.ovPageTitle}
-          </h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Unified orchestration over MCP Tower, GitHub release provenance, HITL governance,
-            memory, and cluster health.
-          </p>
-        </div>
+    <div className="flex-1 overflow-y-auto bg-[#f6f8fb] dark:bg-slate-950 px-6 py-7 text-slate-800 dark:text-slate-200">
+      <div className="max-w-7xl mx-auto space-y-6">
+        {/* Deep-Navy Executive Command Hero */}
+        <section className="relative overflow-hidden rounded-2xl border border-[#233758] bg-gradient-to-br from-[#162238] via-[#1b2942] to-[#22375d] px-7 py-6 text-white shadow-sm">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 opacity-20"
+            style={{
+              backgroundImage:
+                'linear-gradient(rgba(199,216,255,0.16) 1px, transparent 1px), linear-gradient(90deg, rgba(199,216,255,0.16) 1px, transparent 1px)',
+              backgroundSize: '40px 40px',
+            }}
+          />
+          <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+            <div className="space-y-3 max-w-2xl">
+              <div className="text-[11px] font-mono font-semibold tracking-wider text-[#b5c7e6] uppercase">
+                SupremeAI Control Tower / Live Operations
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#f8faff] text-balance">
+                {t.ovPageTitle}
+              </h1>
+              <p className="text-[13px] text-[#c2cfe5] leading-relaxed">
+                Unified orchestration over MCP Tower, GitHub release provenance, HITL governance,
+                memory, and cluster health.
+              </p>
+              <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => runDeepDiagnose('api', 'is_healthy', authUser?.email)}
+                  disabled={isDiagnosing}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white text-[#162544] hover:bg-[#eef3ff] text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isDiagnosing ? 'animate-spin' : ''}`} />
+                  <span>{isDiagnosing ? 'Diagnosing...' : 'Run 5-Layer Diagnose'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigateTab('health-monitor')}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-white/20 bg-white/[0.06] hover:bg-white/[0.12] text-[#edf2ff] text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                >
+                  <Activity className="w-3.5 h-3.5" />
+                  <span>Inspect Health Monitor</span>
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-xs font-mono text-[#a7b8d4]">
+                <span>
+                  Status:{' '}
+                  <strong className={config.maintenanceMode ? 'text-amber-300' : 'text-emerald-300'}>
+                    {config.maintenanceMode ? 'MAINTENANCE LOCK' : 'OPERATIONAL'}
+                  </strong>
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>
+                  Main SHA:{' '}
+                  <strong className="text-white tabular-nums">
+                    {latestGithubCommit?.sha || 'syncing'}
+                  </strong>
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>
+                  Operator:{' '}
+                  <strong className="text-white">
+                    {authUser?.name?.split(' ')[0] || 'Admin'}
+                  </strong>
+                </span>
+              </div>
+            </div>
 
-        <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-slate-500 dark:text-slate-400">
-          <span>
-            Status:{' '}
-            <strong className={config.maintenanceMode ? 'text-amber-500' : 'text-emerald-500'}>
-              {config.maintenanceMode ? 'MAINTENANCE LOCK' : 'OPERATIONAL'}
-            </strong>
-          </span>
-          <span aria-hidden="true">·</span>
-          <span>
-            Main SHA:{' '}
-            <strong className="text-slate-800 dark:text-slate-200 tabular-nums">
-              {latestGithubCommit?.sha || 'syncing'}
-            </strong>
-          </span>
-          <span aria-hidden="true">·</span>
-          <span>
-            Operator:{' '}
-            <strong className="text-slate-800 dark:text-slate-200">
-              {authUser?.name?.split(' ')[0] || 'Admin'}
-            </strong>
-          </span>
-        </div>
-      </div>
+            {/* Live Cluster Health Ring */}
+            <div className="flex items-center gap-5 lg:flex-col lg:items-center shrink-0">
+              <div className="relative w-28 h-28">
+                <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100" aria-hidden="true">
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="38"
+                    fill="none"
+                    stroke="rgba(191,211,245,0.18)"
+                    strokeWidth="7"
+                  />
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="38"
+                    fill="none"
+                    stroke={mcpAlertCount > 0 ? '#fbbf24' : '#5eead4'}
+                    strokeWidth="7"
+                    strokeLinecap="round"
+                    strokeDasharray={`${(ringCircumference * healthPercent) / 100} ${ringCircumference}`}
+                  />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="font-mono text-2xl font-bold tabular-nums text-white">
+                    {healthPercent}%
+                  </span>
+                  <span className="text-[10.5px] text-[#a9bad6]">healthy</span>
+                </div>
+              </div>
+              <div className="text-left lg:text-center font-mono text-[11px] text-[#b5c7e6] tabular-nums">
+                {healthyMcpCount}/{totalConnectedMcp} nodes nominal
+              </div>
+            </div>
+          </div>
+        </section>
 
-      {/* Control Center Safety Mode & Live Provenance Bar */}
-      <ControlCenterSafetyBar
-        provenance={
-          latestDiagnose?.provenance || latestGithubCommit?.provenance || 'local-snapshot'
-        }
-        subtitle={`${pendingHitlCount ?? 0} HITL pending · ${activeTakeoversCount ?? 0} takeovers · ${unclaimedBridgeCount ?? 0} unclaimed bridge orders`}
-      />
+        {/* Control Center Safety Mode & Live Provenance Bar */}
+        <ControlCenterSafetyBar
+          provenance={
+            latestDiagnose?.provenance || latestGithubCommit?.provenance || 'local-snapshot'
+          }
+          subtitle={`${pendingHitlCount ?? 0} HITL pending · ${activeTakeoversCount ?? 0} takeovers · ${unclaimedBridgeCount ?? 0} unclaimed bridge orders`}
+        />
 
       {/* Quick Stats: Fast MCP Tower Health & Usage Pulse Check */}
       <AdminQuickStatsCard
@@ -313,15 +385,20 @@ export const AdminOverviewView: React.FC<AdminOverviewViewProps> = ({
               <Radio className="w-4 h-4 text-emerald-500" />
               <span>Live MCP Diagnostics & SSOT Maintainability</span>
               {ecosystemDiagnostics && (
-                <span
-                  className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${
-                    ecosystemDiagnostics.mcpReachable
-                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                      : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
-                  }`}
-                >
-                  {ecosystemDiagnostics.mcpReachable ? 'MCP LIVE' : 'MCP UNREACHABLE'}
-                </span>
+                <>
+                  <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">
+                    ·
+                  </span>
+                  <span
+                    className={`text-xs font-mono font-semibold ${
+                      ecosystemDiagnostics.mcpReachable
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-rose-600 dark:text-rose-400'
+                    }`}
+                  >
+                    {ecosystemDiagnostics.mcpReachable ? 'MCP Live' : 'MCP Unreachable'}
+                  </span>
+                </>
               )}
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono truncate">
@@ -889,6 +966,7 @@ export const AdminOverviewView: React.FC<AdminOverviewViewProps> = ({
             </div>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

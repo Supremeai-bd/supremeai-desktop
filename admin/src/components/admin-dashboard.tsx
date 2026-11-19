@@ -196,7 +196,9 @@ type IconName =
   | "plus"
   | "info"
   | "pulse"
-  | "shieldCheck";
+  | "shieldCheck"
+  | "sun"
+  | "moon";
 
 const ICON_PATHS: Record<IconName, string[]> = {
   grid: ["M3 3h7v7H3z", "M14 3h7v7h-7z", "M14 14h7v7h-7z", "M3 14h7v7H3z"],
@@ -229,6 +231,18 @@ const ICON_PATHS: Record<IconName, string[]> = {
   info: ["M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z", "M12 11v5", "M12 7h.01"],
   pulse: ["M2 12h4l3-8 5 16 3-8h5"],
   shieldCheck: ["M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11z", "m9 12 2 2 4-4"],
+  sun: [
+    "M12 12m-4 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
+    "M12 2v2",
+    "M12 20v2",
+    "m4.93 4.93 1.41 1.41",
+    "m17.66 17.66 1.41 1.41",
+    "M2 12h2",
+    "M20 12h2",
+    "m6.34 17.66-1.41 1.41",
+    "m19.07 4.93-1.41 1.41",
+  ],
+  moon: ["M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"],
 };
 
 const PAGE_META: Record<PageId, { eyebrow: string; title: string; description: string }> = {
@@ -558,19 +572,24 @@ function IssueLine({ issue, compact = false, onClaim }: { issue: WorkOrder; comp
   return (
     <div className={`issue-line${compact ? " issue-line-compact" : ""}`}>
       <div className="issue-line-main">
-        <div className="issue-number">{issue.number ? `#${issue.number}` : "Work order"}</div>
-        {issue.url ? (
-          <a href={issue.url} target="_blank" rel="noreferrer" className="issue-title">{issue.title}<Icon name="external" size={13} /></a>
-        ) : <span className="issue-title">{issue.title}</span>}
+        <div className="issue-header-row">
+          <span className="issue-number">{issue.number ? `#${issue.number}` : "Order"}</span>
+          {issue.url ? (
+            <a href={issue.url} target="_blank" rel="noreferrer" className="issue-title">{issue.title}<Icon name="external" size={13} /></a>
+          ) : <span className="issue-title">{issue.title}</span>}
+        </div>
         <div className="issue-meta">
           <span><Icon name="clock" size={13} /> Updated {formatRelative(issue.updatedAt)}</span>
+          <span aria-hidden="true">·</span>
           <span>{issue.comments} comments</span>
-          {issue.labels.slice(0, 3).map((label) => <span className="label-chip" key={label}>{label}</span>)}
+          {issue.labels.slice(0, 3).map((label) => (
+            <span className="label-meta" key={label}>· {label}</span>
+          ))}
         </div>
       </div>
       {onClaim && issue.number ? (
         <button type="button" className="button button-secondary issue-claim" onClick={() => onClaim(issue)}>
-          <Icon name="plus" size={15} />Claim
+          <Icon name="plus" size={14} />Claim
         </button>
       ) : null}
     </div>
@@ -641,23 +660,33 @@ function OverviewPage({
 
   return (
     <div className="page-stack">
-      <div className="overview-hero panel">
-        <div className="hero-glow" />
+      <div className="overview-hero">
+        <div className="hero-grid-lines" aria-hidden="true" />
         <div className="overview-hero-copy">
-          <div className="hero-live-label"><span className="pulse-dot" /> SUPREMEAI CONTROL TOWER <span className="hero-divider">/</span> LIVE SYSTEM VIEW</div>
+          <div className="hero-live-label">
+            SUPREMEAI CONTROL TOWER <span className="hero-divider">/</span> LIVE OPERATIONS
+          </div>
           <h1>One command center.<br /><span>Every signal in view.</span></h1>
-          <p>Monitor the federation, catch issues early, and operate only through owner-authorized, auditable controls.</p>
+          <p>Monitor the federation, catch provider regressions early, and operate strictly through owner-authorized, auditable controls.</p>
+          <div className="hero-actions">
+            <button type="button" className="button button-light" onClick={() => onNavigate("services")}>
+              Inspect services <Icon name="chevron" size={14} />
+            </button>
+            <button type="button" className="button button-ghost-light" onClick={onRunAudit}>
+              <Icon name="eye" size={14} /> Run web audit
+            </button>
+          </div>
           <div className="hero-status-line">
             <StatusBadge status={overallStatus} />
-            <span className="hero-status-summary">{counts.healthy} of {counts.total} provider checks healthy</span>
-            <button type="button" className="inline-link" onClick={() => onNavigate("services")}>View service health <Icon name="chevron" size={14} /></button>
+            <span aria-hidden="true">·</span>
+            <span>{counts.healthy} of {counts.total} provider checks healthy</span>
+            <span aria-hidden="true">·</span>
+            <span>{agentsOnline} assistants online</span>
           </div>
         </div>
         <div className="overview-hero-visual">
-          <div className="hero-orbit orbit-one" />
-          <div className="hero-orbit orbit-two" />
           <HealthRing percent={percentage} label="healthy" />
-          <div className="hero-visual-caption"><span className="pulse-dot" /> Live provider telemetry</div>
+          <div className="hero-visual-caption">Live provider telemetry</div>
         </div>
       </div>
 
@@ -1195,6 +1224,44 @@ export function AdminDashboard() {
   const [claimingIssue, setClaimingIssue] = useState<number | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [globalQuery, setGlobalQuery] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem("supremeai_admin_theme");
+      if (stored === "dark" || stored === "light") setTheme(stored);
+    } catch {
+      // Ignore storage access errors in restricted frames
+    }
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        const input = document.getElementById("admin-global-search") as HTMLInputElement | null;
+        input?.focus();
+      } else if (event.key === "Escape") {
+        setSearchFocused(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const toggleTheme = () => {
+    setTheme((prev) => {
+      const next = prev === "light" ? "dark" : "light";
+      try {
+        window.localStorage.setItem("supremeai_admin_theme", next);
+      } catch {
+        // Ignore storage access errors
+      }
+      return next;
+    });
+  };
 
   const refresh = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -1383,15 +1450,84 @@ export function AdminDashboard() {
     }
   };
 
+  const serviceSummary = useMemo(() => serviceCounts(data?.services || []), [data]);
+  const healthPercent = serviceSummary.total
+    ? Math.round((serviceSummary.healthy / serviceSummary.total) * 100)
+    : 0;
+
+  const globalResults = useMemo(() => {
+    const q = globalQuery.trim().toLowerCase();
+    if (!q) return [];
+    const items: Array<{ id: string; title: string; subtitle: string; kind: string; onSelect: () => void }> = [];
+
+    for (const group of NAV_GROUPS) {
+      for (const item of group.items) {
+        if (item.title.toLowerCase().includes(q) || group.label.toLowerCase().includes(q)) {
+          items.push({
+            id: `page-${item.id}`,
+            title: item.title,
+            subtitle: PAGE_META[item.id].description,
+            kind: "Page",
+            onSelect: () => {
+              navigate(item.id);
+              setGlobalQuery("");
+              setSearchFocused(false);
+            },
+          });
+        }
+      }
+    }
+
+    for (const service of data?.services || []) {
+      if (`${service.displayName} ${service.provider} ${service.role} ${service.id}`.toLowerCase().includes(q)) {
+        items.push({
+          id: `svc-${service.id}`,
+          title: service.displayName,
+          subtitle: `${service.provider} · ${service.role} · ${statusLabel(service.status)}`,
+          kind: "Service",
+          onSelect: () => {
+            navigate("services");
+            setSelectedServiceId(service.id);
+            setGlobalQuery("");
+            setSearchFocused(false);
+          },
+        });
+      }
+    }
+
+    for (const issue of data?.bridge.issues || []) {
+      if (`${issue.title} #${issue.number ?? ""} ${issue.labels.join(" ")}`.toLowerCase().includes(q)) {
+        items.push({
+          id: `issue-${issue.number ?? issue.title}`,
+          title: issue.number ? `#${issue.number} ${issue.title}` : issue.title,
+          subtitle: issue.labels.join(" · ") || "Bridge work order",
+          kind: "Queue",
+          onSelect: () => {
+            navigate("bridge");
+            setGlobalQuery("");
+            setSearchFocused(false);
+          },
+        });
+      }
+    }
+
+    return items.slice(0, 8);
+  }, [globalQuery, data]);
+
   return (
-    <div className="dashboard-shell">
+    <div className="dashboard-shell" data-theme={theme}>
       <aside className={`sidebar${mobileNavOpen ? " sidebar-open" : ""}`} aria-label="Admin navigation">
         <div className="brand-lockup">
           <div className="brand-mark"><span>S</span><i /></div>
-          <div className="brand-wordmark"><strong>SUPREME<span>AI</span></strong><small>STUDIO / CONTROL</small></div>
-          <span className="brand-edition">ADMIN</span>
+          <div className="brand-wordmark"><strong>Supreme<span>AI</span></strong><small>CONTROL TOWER</small></div>
         </div>
-        <div className="sidebar-environment"><span className="environment-indicator" /><span>PRODUCTION CONTROL</span><span className="environment-live">LIVE</span></div>
+        <div className="workspace-switcher">
+          <div className="workspace-mark">SA</div>
+          <div className="workspace-name">
+            <strong>SupremeAI Studio</strong>
+            <span>{data?.mcpConnected ? "Production · Live MCP" : "Production · Offline"}</span>
+          </div>
+        </div>
         <nav className="sidebar-nav">
           {NAV_GROUPS.map((group) => (
             <div className="nav-group" key={group.label}>
@@ -1410,14 +1546,26 @@ export function AdminDashboard() {
         </nav>
         <div className="sidebar-spacer" />
         <div className="sidebar-status-card">
-          <div className="sidebar-status-top"><span className={`sidebar-status-indicator indicator-${safeStatus(overallStatus)}`} /><span>Control tower</span><StatusBadge status={overallStatus} small /></div>
-          <span className="sidebar-status-caption">{data?.mcpConnected ? `${data.services.length} provider checks · updated ${formatRelative(data.system.checkedAt)}` : "Waiting for live telemetry"}</span>
-          <button type="button" className="sidebar-status-link" onClick={() => navigate("services")}>System diagnostics <Icon name="arrow" size={13} /></button>
+          <div className="sidebar-status-top">
+            <span>System Health</span>
+            <StatusBadge status={overallStatus} small />
+          </div>
+          <div className="sidebar-status-bar"><i style={{ width: `${healthPercent}%` }} /></div>
+          <span className="sidebar-status-caption">
+            {data?.mcpConnected ? `${serviceSummary.healthy}/${serviceSummary.total} healthy · ${formatRelative(data.system.checkedAt)}` : "Waiting for live telemetry"}
+          </span>
+          <button type="button" className="sidebar-status-link" onClick={() => navigate("services")}>
+            System diagnostics <Icon name="arrow" size={12} />
+          </button>
         </div>
         <button type="button" className={`sidebar-owner-button${authenticated ? " owner-active" : ""}`} onClick={() => { setAccessError(null); setShowAccessModal(true); }}>
-          <span className="owner-avatar"><Icon name={authenticated ? "shieldCheck" : "lock"} size={16} /></span><span className="owner-button-copy"><strong>{authenticated ? "Owner session" : "Owner access"}</strong><small>{authenticated ? "Authenticated · 8h session" : session.configured || data?.adminAccessConfigured ? "Sign in to operate" : "Read-only controls"}</small></span><Icon name="chevron" size={15} />
+          <span className="owner-avatar"><Icon name={authenticated ? "shieldCheck" : "lock"} size={16} /></span>
+          <span className="owner-button-copy">
+            <strong>{authenticated ? "Owner session" : "Owner access"}</strong>
+            <small>{authenticated ? "Authenticated · 8h cookie" : session.configured || data?.adminAccessConfigured ? "Sign in to operate" : "Read-only controls"}</small>
+          </span>
+          <Icon name="chevron" size={15} />
         </button>
-        <div className="sidebar-bottom-meta"><span>SUPREMEAI CONTROL PLANE</span><span>v1.0.0 · live MCP</span></div>
       </aside>
 
       {mobileNavOpen ? <button type="button" className="sidebar-scrim" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} /> : null}
@@ -1426,22 +1574,61 @@ export function AdminDashboard() {
         <header className="topbar">
           <div className="topbar-leading">
             <IconButton name="menu" label="Open navigation" className="mobile-menu-button" onClick={() => setMobileNavOpen((open) => !open)} />
-            <div className="breadcrumb"><span>SupremeAI</span><Icon name="chevron" size={13} /><strong>{pageMeta.title}</strong></div>
+            <div className="breadcrumb"><span>SupremeAI</span><Icon name="chevron" size={14} /><strong>{pageMeta.title}</strong></div>
           </div>
           <div className="topbar-actions">
-            <span className={`topbar-live ${data?.mcpConnected ? "" : "topbar-live-offline"}`}><i />{data?.mcpConnected ? "LIVE TELEMETRY" : "SOURCE OFFLINE"}</span>
-            <span className="topbar-clock"><Icon name="clock" size={14} />{clock ? clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--:--"}</span>
-            <span className="topbar-last-updated">{lastUpdated ? `Updated ${formatRelative(lastUpdated.toISOString())}` : "Waiting for sync"}</span>
+            <div className="global-search-wrap">
+              <label className="global-search">
+                <Icon name="search" size={15} />
+                <input
+                  id="admin-global-search"
+                  value={globalQuery}
+                  onFocus={() => setSearchFocused(true)}
+                  onBlur={() => window.setTimeout(() => setSearchFocused(false), 160)}
+                  onChange={(event) => setGlobalQuery(event.target.value)}
+                  placeholder="Jump to pages, services, orders…"
+                  aria-label="Global dashboard search"
+                />
+                <kbd>⌘K</kbd>
+              </label>
+              {searchFocused && globalQuery.trim() ? (
+                <div className="global-search-popover" role="listbox">
+                  {globalResults.length ? globalResults.map((result) => (
+                    <button type="button" key={result.id} className="search-result-item" onMouseDown={(event) => { event.preventDefault(); result.onSelect(); }}>
+                      <span className="search-result-copy">
+                        <strong>{result.title}</strong>
+                        <span>{result.subtitle}</span>
+                      </span>
+                      <span className="search-result-kind">{result.kind}</span>
+                    </button>
+                  )) : <div className="search-empty">No matching pages, services, or orders</div>}
+                </div>
+              ) : null}
+            </div>
+            <span className={`topbar-live ${data?.mcpConnected ? "" : "topbar-live-offline"}`}>
+              <i />{data?.mcpConnected ? "Live" : "Offline"}
+            </span>
+            <span className="topbar-clock">{clock ? clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--:--"}</span>
+            <IconButton
+              name={theme === "light" ? "moon" : "sun"}
+              label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+              onClick={toggleTheme}
+            />
             <IconButton name="refresh" label="Refresh live telemetry" className={refreshing ? "refresh-active" : ""} onClick={() => void refresh(true)} disabled={refreshing} />
-            <button type="button" className="button button-top-audit" onClick={() => { navigate("web-audit"); void runAudit(); }} disabled={auditing}><Icon name="eye" size={15} />{auditing ? "Auditing…" : "Run audit"}</button>
-            <button type="button" className={`topbar-owner-button${authenticated ? " topbar-owner-active" : ""}`} onClick={() => { setAccessError(null); setShowAccessModal(true); }}><Icon name={authenticated ? "shieldCheck" : "lock"} size={15} /><span>{authenticated ? "Owner" : "Access"}</span></button>
+            <button type="button" className={`topbar-owner-button${authenticated ? " topbar-owner-active" : ""}`} onClick={() => { setAccessError(null); setShowAccessModal(true); }}>
+              <Icon name={authenticated ? "shieldCheck" : "lock"} size={15} />
+              <span>{authenticated ? "Owner" : "Access"}</span>
+            </button>
           </div>
         </header>
         <main className="content-area">
           {loadError && data ? <div className="notice-banner notice-warning"><Icon name="alert" size={16} /><span>{loadError}</span><button type="button" onClick={() => void refresh(true)}>Retry</button></div> : null}
           {data ? renderPage() : loading ? <LoadingState message="Checking the MCP tower, public Studio frontend, and PostgreSQL audit store." /> : <div className="load-failed panel"><span className="load-failed-icon"><Icon name="alert" size={22} /></span><h1>Control tower unavailable</h1><p>{loadError || "The live dashboard could not start."}</p><button type="button" className="button button-primary" onClick={() => void refresh(false)}><Icon name="refresh" size={15} /> Try again</button></div>}
         </main>
-        <footer className="main-footer"><span><span className="footer-pulse" /> Control plane telemetry · refreshes every 60 seconds</span><span>{data?.system.checkedAt ? `Source timestamp ${formatDate(data.system.checkedAt)}` : "No source timestamp"}</span></footer>
+        <footer className="main-footer">
+          <span>SupremeAI Control Tower · Auto-refresh every 60s</span>
+          <span className="tabular">{lastUpdated ? `Synced ${formatRelative(lastUpdated.toISOString())}` : "Waiting for first sync"}</span>
+        </footer>
       </div>
 
       {showAccessModal ? <AccessModal session={{ configured: session.configured || data?.adminAccessConfigured === true, authenticated }} token={accessToken} setToken={setAccessToken} error={accessError} busy={accessBusy} onSubmit={(event) => void submitAccess(event)} onClose={() => { setShowAccessModal(false); setAccessError(null); setAccessToken(""); }} onSignOut={() => void signOut()} /> : null}
