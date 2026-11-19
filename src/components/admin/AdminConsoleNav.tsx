@@ -22,9 +22,14 @@ import {
   ChevronRight,
   Pin,
   Search,
+  Layers,
 } from 'lucide-react';
 import { useI18n } from '../../utils/i18n';
 import { logger } from '../../utils/logger';
+import {
+  calculateAccountRunway,
+  useProviderAccountsStore,
+} from '../../stores/useProviderAccountsStore';
 
 interface AdminConsoleNavProps {
   activeTab: string;
@@ -53,6 +58,11 @@ export const AdminConsoleNav: React.FC<AdminConsoleNavProps> = ({
   healthAlertCount = 0,
 }) => {
   const { t } = useI18n();
+  const providerAccounts = useProviderAccountsStore((s) => s.accounts);
+  const atRiskProviderAccounts = useMemo(
+    () => providerAccounts.filter((acc) => calculateAccountRunway(acc).severity !== 'nominal').length,
+    [providerAccounts]
+  );
   const [showAdvancedAdmin, setShowAdvancedAdmin] = useState(false);
   const [toolFilter, setToolFilter] = useState('');
   const [pinnedAdminToolIds, setPinnedAdminToolIds] = useState<string[]>(() => {
@@ -115,6 +125,13 @@ export const AdminConsoleNav: React.FC<AdminConsoleNavProps> = ({
     {
       title: 'AI & Compute',
       items: [
+        {
+          id: 'provider-accounts',
+          label: 'Multi-Account Hub',
+          icon: <Layers className="w-4 h-4 shrink-0" />,
+          badge: atRiskProviderAccounts > 0 ? `${atRiskProviderAccounts}` : undefined,
+          badgeAlert: atRiskProviderAccounts > 0,
+        },
         {
           id: 'llm-gateway',
           label: 'LLM Gateway',

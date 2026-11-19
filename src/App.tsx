@@ -153,6 +153,11 @@ const AdminProviderKeysView = React.lazy(() =>
     default: m.AdminProviderKeysView,
   }))
 );
+const AdminMultiAccountProviderHub = React.lazy(() =>
+  import('./components/admin/AdminMultiAccountProviderHub').then((m) => ({
+    default: m.AdminMultiAccountProviderHub,
+  }))
+);
 const AdminAuthModal = React.lazy(() =>
   import('./components/admin/AdminAuthModal').then((m) => ({ default: m.AdminAuthModal }))
 );
@@ -244,6 +249,7 @@ const ADMIN_ONLY_TABS = new Set([
   'llm-gateway',
   'feature-flags',
   'provider-keys',
+  'provider-accounts',
   'security',
   'system-audit',
   'customers',
@@ -278,6 +284,7 @@ const SUBVIEW_TITLES: Record<string, string> = {
   'llm-gateway': 'LLM Gateway & Pricing',
   'feature-flags': 'Feature Flags',
   'provider-keys': 'Provider API Keys & Infisical Vault',
+  'provider-accounts': 'Unified Multi-Account Provider Hub',
   security: 'Security & Firewall',
   'system-audit': 'System Audit Log',
   customers: 'Customer Directory',
@@ -1850,6 +1857,8 @@ export default function App() {
                           {activeTab === 'feature-flags' && <AdminFeatureFlagsView />}
 
                           {activeTab === 'provider-keys' && <AdminProviderKeysView />}
+
+                          {activeTab === 'provider-accounts' && <AdminMultiAccountProviderHub />}
 
                           {activeTab === 'security' && (
                             <AdminSecurityView

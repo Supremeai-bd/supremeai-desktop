@@ -29,6 +29,9 @@ import { useAuthStore } from '../../stores/useAuthStore';
 import { useControlCenterStore } from '../../stores/useControlCenterStore';
 import { ControlCenterSafetyBar } from './ControlCenterSafetyGateModal';
 import { AdminQuickStatsCard } from './AdminQuickStatsCard';
+import { AdminD3TelemetryWidgets } from './AdminD3TelemetryWidgets';
+import { AdminLiveServicesCommandMatrix } from './AdminLiveServicesCommandMatrix';
+import { AdminProviderPoolsOverviewCard } from './AdminProviderPoolsOverviewCard';
 import { useI18n } from '../../utils/i18n';
 
 interface AdminOverviewViewProps {
@@ -60,6 +63,9 @@ export const AdminOverviewView: React.FC<AdminOverviewViewProps> = ({
     healthSnapshot,
     trafficSummary,
     ecosystemDiagnostics,
+    healerIncidents,
+    pipelines,
+    cronTasks,
     isDiagnosing,
     isLoadingDiagnostics,
     isLoadingHealth,
@@ -255,6 +261,35 @@ export const AdminOverviewView: React.FC<AdminOverviewViewProps> = ({
         onPulseRefresh={() => void runServiceHealthProbe(authUser?.email)}
         onNavigateTab={onNavigateTab}
       />
+
+      {/* Real-Time D3 Telemetry Widgets: Active Users, Monthly Token Usage Trends & System Health */}
+      <AdminD3TelemetryWidgets
+        customers={customers}
+        services={services}
+        healthSnapshot={healthSnapshot}
+        isRefreshing={isLoadingHealth || isProbingHealth}
+        onRefreshTelemetry={() => void loadServiceHealth(true)}
+        onNavigateTab={onNavigateTab}
+      />
+
+      {/* All Services Real-Time Health, Topology, Load Matrix & Live Activity Feed */}
+      <AdminLiveServicesCommandMatrix
+        services={services}
+        workers={workers}
+        jobs={jobs}
+        healthSnapshot={healthSnapshot}
+        trafficSummary={trafficSummary}
+        healerIncidents={healerIncidents}
+        pipelines={pipelines}
+        cronTasks={cronTasks}
+        isRefreshing={isLoadingHealth || isProbingHealth}
+        onProbeAll={() => void runServiceHealthProbe(authUser?.email)}
+        onRefreshHealth={() => void loadServiceHealth(true)}
+        onNavigateTab={onNavigateTab}
+      />
+
+      {/* Multi-Account Provider Pools, Quota Runway & 1-Click Failover Watch */}
+      <AdminProviderPoolsOverviewCard onNavigateTab={onNavigateTab} />
 
       {/* Live 5-Layer Deep Diagnose TruthMatrix & ReleaseGate Strip */}
       <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-4">
