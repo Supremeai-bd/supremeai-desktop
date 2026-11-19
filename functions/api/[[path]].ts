@@ -6,6 +6,8 @@
  * unbuffered SSE (`text/event-stream`) streaming.
  */
 
+import { applyCorsHeaders } from '../_lib/edgeHelpers';
+
 interface PagesContext {
   request: Request;
   env?: Record<string, string | undefined>;
@@ -29,31 +31,16 @@ const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   'x-real-ip',
 ]);
 
-function applyCorsHeaders(headers: Headers, requestOrigin: string): void {
-  headers.set('Access-Control-Allow-Origin', requestOrigin);
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  headers.set(
-    'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, X-SupremeAI-Key, Accept, Cache-Control'
-  );
-  headers.set(
-    'Access-Control-Expose-Headers',
-    'X-SupremeAI-Provider, X-SupremeAI-Slot, X-SupremeAI-Tier, X-SupremeAI-Cache'
-  );
-  headers.set('Access-Control-Allow-Credentials', 'true');
-  headers.set('Vary', 'Origin');
-}
-
 export async function onRequest(context: PagesContext): Promise<Response> {
   const { request, env = {} } = context;
   const incomingUrl = new URL(request.url);
-  const requestOrigin = request.headers.get('Origin') || incomingUrl.origin;
+  const requestOrigin = request.headers.get('Origin');
 
   if (request.method === 'OPTIONS') {
     const preflightHeaders = new Headers({
       'Access-Control-Max-Age': '86400',
     });
-    applyCorsHeaders(preflightHeaders, requestOrigin);
+    applyCorsHeaders(preflightHeaders, requestOrigin, incomingUrl.origin, env);
     return new Response(null, {
       status: 204,
       headers: preflightHeaders,
@@ -142,8 +129,8 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       responseHeaders.set('location', location.slice(upstreamOrigin.length) || '/');
     }
 
-    // Normalize CORS headers for same-origin and preview origins without duplicate values
-    applyCorsHeaders(responseHeaders, requestOrigin);
+    // Normalize CORS headers for allowlisted origins without arbitrary reflection
+    applyCorsHeaders(responseHeaders, requestOrigin, incomingUrl.origin, env);
 
     // Preserve streaming SSE responses without buffering
     const contentType = responseHeaders.get('content-type') || '';
@@ -159,7 +146,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     });
   } catch (err: unknown) {
     const errorHeaders = new Headers({ 'Content-Type': 'application/json' });
-    applyCorsHeaders(errorHeaders, requestOrigin);
+    applyCorsHeaders(errorHeaders, requestOrigin, incomingUrl.origin, env);
     return new Response(
       JSON.stringify({
         error: 'Upstream API gateway unreachable via same-origin proxy.',

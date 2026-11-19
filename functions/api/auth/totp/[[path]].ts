@@ -68,13 +68,24 @@ async function saveTotpToPrefs(
 
 export async function onRequest(context: PagesContext): Promise<Response> {
   const { request, env } = context;
-  if (request.method === 'OPTIONS') return handleCorsPreflight(request);
+  if (request.method === 'OPTIONS') return handleCorsPreflight(request, env);
 
   const incomingUrl = new URL(request.url);
   const subPath = incomingUrl.pathname.replace(/^\/api\/auth\/totp\/?/, '').trim();
   const upstreamOrigin = resolveUpstreamOrigin(env);
-  const authHeader = request.headers.get('Authorization') || '';
+  const authHeader = (request.headers.get('Authorization') || '').trim();
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
   const envSecret = env?.ADMIN_TOTP_SECRET?.trim() || '';
+
+  if (!bearer || bearer.startsWith('tok_guest_') || bearer.startsWith('sk-supreme-guest')) {
+    return jsonEdgeResponse(
+      { error: 'Authenticated administrator session is required for TOTP operations.' },
+      401,
+      request,
+      undefined,
+      env
+    );
+  }
 
   if (subPath === 'status' && request.method === 'GET') {
     const userEmail =
@@ -91,26 +102,48 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         accountName: userEmail,
       },
       200,
-      request
+      request,
+      undefined,
+      env
     );
   }
 
   if (subPath === 'setup' && request.method === 'POST') {
     const body = (await request.json().catch(() => ({}))) as {
       userEmail?: string;
+      currentToken?: string;
     };
+    const existingVault = await loadTotpSecretFromPrefs(upstreamOrigin, authHeader);
+    const existingSecret = envSecret || (existingVault?.enrolled ? existingVault.secret : '');
+    if (existingSecret) {
+      const currentCode = String(body.currentToken || '').trim();
+      const validCurrent = await verifyEdgeTotpToken(existingSecret, currentCode, 1);
+      if (!validCurrent) {
+        return jsonEdgeResponse(
+          {
+            error:
+              'TOTP is already enrolled. Enter your current 6-digit Authenticator code to rotate your TOTP key.',
+            requiresCurrentToken: true,
+          },
+          401,
+          request,
+          undefined,
+          env
+        );
+      }
+    }
+
     const userEmail = (body.userEmail || 'operator@supremeai.bd').trim().toLowerCase();
     const secret = generateEdgeBase32Secret(20);
     await saveTotpToPrefs(upstreamOrigin, authHeader, secret, false);
 
-    // Also notify Render admin totp-setup if available (non-blocking)
     fetchWithTimeout(
       `${upstreamOrigin}/api/admin/totp-setup`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(authHeader ? { Authorization: authHeader } : {}),
+          Authorization: authHeader,
         },
         body: JSON.stringify({ userEmail }),
       },
@@ -132,7 +165,9 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         accountName: userEmail,
       },
       200,
-      request
+      request,
+      undefined,
+      env
     );
   }
 
@@ -150,7 +185,9 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       return jsonEdgeResponse(
         { error: 'No pending TOTP setup secret found. Please initiate setup first.' },
         400,
-        request
+        request,
+        undefined,
+        env
       );
     }
 
@@ -159,7 +196,9 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       return jsonEdgeResponse(
         { error: 'Invalid 6-digit Authenticator verification code.' },
         401,
-        request
+        request,
+        undefined,
+        env
       );
     }
 
@@ -179,9 +218,11 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         message: 'Two-factor authentication verified and enabled.',
       },
       200,
-      request
+      request,
+      undefined,
+      env
     );
   }
 
-  return jsonEdgeResponse({ error: 'Unknown TOTP endpoint' }, 404, request);
+  return jsonEdgeResponse({ error: 'Unknown TOTP endpoint' }, 404, request, undefined, env);
 }

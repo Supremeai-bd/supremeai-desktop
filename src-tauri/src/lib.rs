@@ -79,7 +79,11 @@ fn process_sse_line(
 }
 
 #[tauri::command]
-async fn send_chat(request: ChatRequest, on_chunk: Channel<String>) -> Result<ChatResult, String> {
+async fn send_chat(
+    request: ChatRequest,
+    on_chunk: Channel<String>,
+    user_state: tauri::State<'_, UserSessionState>,
+) -> Result<ChatResult, String> {
     let prompt = request.prompt.trim();
     if prompt.is_empty() {
         return Err("Enter a message before sending.".to_string());
@@ -129,14 +133,20 @@ async fn send_chat(request: ChatRequest, on_chunk: Channel<String>) -> Result<Ch
     });
 
     let client = reqwest::Client::builder()
+        .https_only(true)
         .timeout(Duration::from_secs(45))
         .build()
         .map_err(|_| "Could not initialize the secure Gateway connection.".to_string())?;
-    let response = client
+    let mut request_builder = client
         .post(format!("{base}/v1/chat/completions"))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header("X-SupremeAI-Key", "guest")
-        .json(&payload)
+        .json(&payload);
+    if let Some(token) = auth::current_access_token(&user_state) {
+        request_builder = request_builder.bearer_auth(token);
+    } else {
+        request_builder = request_builder.header("X-SupremeAI-Key", "guest");
+    }
+    let response = request_builder
         .send()
         .await
         .map_err(|error| {
@@ -149,13 +159,12 @@ async fn send_chat(request: ChatRequest, on_chunk: Channel<String>) -> Result<Ch
 
     let status = response.status();
     if !status.is_success() {
-        let fallback_reply = format!(
-            "SupremeAI Neural Assistant online. Processing request: \"{prompt}\". (Notice: Gateway standby HTTP {status}). All local tools, memory streams, and holographic interfaces are operational."
-        );
-        let _ = on_chunk.send(fallback_reply.clone());
-        return Ok(ChatResult {
-            text: fallback_reply,
-            conversation_id: Some(request.conversation_id),
+        return Err(match status.as_u16() {
+            401 => "Your session has expired. Please sign in again.".to_string(),
+            403 => "This account is not authorized to access this model.".to_string(),
+            429 => "Rate limit reached. Please wait a moment and try again.".to_string(),
+            502..=504 => "The SupremeAI Gateway is temporarily unavailable. Please try again.".to_string(),
+            code => format!("The SupremeAI Gateway returned an error (HTTP {code}). Please try again."),
         });
     }
 

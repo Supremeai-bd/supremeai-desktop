@@ -62,12 +62,15 @@ jobs:
           node-version: "22"
           cache: "npm"
 
-      - name: Sync Version & Build Web Bundle
+      - name: Sync Version, Test & Build Web Bundle
         shell: bash
+        env:
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
         run: |
           set -euo pipefail
           npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
           npm run version:sync
+          npm run test:security
           npm run build:web
           tar -czf supremeai-web-dist.tar.gz dist/
 
@@ -110,6 +113,8 @@ jobs:
 
       - name: Sync Version & Build Shared App Bundle
         shell: bash
+        env:
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
         run: |
           set -euo pipefail
           npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
@@ -118,6 +123,8 @@ jobs:
 
       - name: Build Tauri NSIS & MSI Installers
         shell: bash
+        env:
+          SUPREMEAI_SUPABASE_ANON_KEY: ${{ secrets.SUPREMEAI_SUPABASE_ANON_KEY }}
         run: npm run tauri -- build --config src-tauri/tauri.conf.json
 
       - name: Upload Desktop Artifacts
@@ -205,6 +212,8 @@ jobs:
 
       - name: Sync Version & Build Shared App Bundle
         shell: bash
+        env:
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
         run: |
           set -euo pipefail
           npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
@@ -213,6 +222,8 @@ jobs:
 
       - name: Initialize & Build Tauri v2 Android Release APK
         shell: bash
+        env:
+          SUPREMEAI_SUPABASE_ANON_KEY: ${{ secrets.SUPREMEAI_SUPABASE_ANON_KEY }}
         run: |
           set -euo pipefail
           if [ ! -d "src-tauri/gen/android" ]; then
@@ -237,18 +248,16 @@ jobs:
             exit 1
           fi
 
-          KEYSTORE_PATH="$RUNNER_TEMP/supremeai-release.keystore"
-          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-            KS_PASS="${ANDROID_KEYSTORE_PASSWORD}"
-            KEY_ALIAS="${ANDROID_KEY_ALIAS}"
-            KEY_PASS="${ANDROID_KEY_PASSWORD}"
-          else
-            keytool -genkey -v -keystore "$KEYSTORE_PATH" -storepass android -alias supremeai -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=SupremeAI Studio,O=SupremeAI,C=BD"
-            KS_PASS="android"
-            KEY_ALIAS="supremeai"
-            KEY_PASS="android"
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ] || [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ] || [ -z "${ANDROID_KEY_ALIAS:-}" ] || [ -z "${ANDROID_KEY_PASSWORD:-}" ]; then
+            echo "::error::Android release signing secrets (ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD) are required. Refusing to sign release APKs with an ephemeral keystore."
+            exit 1
           fi
+
+          KEYSTORE_PATH="$RUNNER_TEMP/supremeai-release.keystore"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          KS_PASS="${ANDROID_KEYSTORE_PASSWORD}"
+          KEY_ALIAS="${ANDROID_KEY_ALIAS}"
+          KEY_PASS="${ANDROID_KEY_PASSWORD}"
 
           while IFS= read -r apk; do
             [ -z "$apk" ] && continue

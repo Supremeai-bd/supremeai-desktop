@@ -21,8 +21,6 @@ interface StoredVaultEntry {
   [key: string]: unknown;
 }
 
-const edgeVaultStore: StoredVaultEntry[] = [];
-
 function redactVaultEntry(
   entry: StoredVaultEntry,
   includeEncrypted: boolean
@@ -35,122 +33,201 @@ function redactVaultEntry(
   return { ...safe, hasEncryptedSecret };
 }
 
+async function fetchUserVaultEntries(
+  upstreamOrigin: string,
+  authHeader: string
+): Promise<{ ok: boolean; status: number; entries: StoredVaultEntry[] }> {
+  const res = await fetchWithTimeout(
+    `${upstreamOrigin}/api/v1/user/preferences`,
+    { headers: { Authorization: authHeader, Accept: 'application/json' } },
+    5500
+  );
+  if (!res.ok) {
+    return { ok: false, status: res.status, entries: [] };
+  }
+  const data = (await res.json().catch(() => null)) as any;
+  const remoteEntries = data?.preferences?.browser_vault_entries;
+  return {
+    ok: true,
+    status: 200,
+    entries: Array.isArray(remoteEntries) ? remoteEntries : [],
+  };
+}
+
 export async function onRequest(context: PagesContext): Promise<Response> {
   const { request, env } = context;
-  if (request.method === 'OPTIONS') return handleCorsPreflight(request);
+  if (request.method === 'OPTIONS') return handleCorsPreflight(request, env);
 
   const incomingUrl = new URL(request.url);
   const upstreamOrigin = resolveUpstreamOrigin(env);
-  const authHeader = request.headers.get('Authorization') || '';
+  const authHeader = (request.headers.get('Authorization') || '').trim();
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+
+  if (!bearer || bearer.startsWith('tok_guest_') || bearer.startsWith('sk-supreme-guest')) {
+    return jsonEdgeResponse(
+      { error: 'Authenticated user session is required to access the credential vault.' },
+      401,
+      request,
+      undefined,
+      env
+    );
+  }
+
   const includeEncrypted = incomingUrl.searchParams.get('includeEncrypted') === '1';
   const domainFilter = (incomingUrl.searchParams.get('domain') || '').trim().toLowerCase();
 
-  if (request.method === 'GET') {
-    let entries: StoredVaultEntry[] = [...edgeVaultStore];
-
-    if (authHeader) {
-      try {
-        const res = await fetchWithTimeout(
-          `${upstreamOrigin}/api/v1/user/preferences`,
-          { headers: { Authorization: authHeader, Accept: 'application/json' } },
-          5000
+  try {
+    if (request.method === 'GET') {
+      const loaded = await fetchUserVaultEntries(upstreamOrigin, authHeader);
+      if (!loaded.ok) {
+        return jsonEdgeResponse(
+          { error: 'Could not verify user vault session.' },
+          loaded.status === 401 || loaded.status === 403 ? loaded.status : 502,
+          request,
+          undefined,
+          env
         );
-        if (res.ok) {
-          const data = (await res.json().catch(() => null)) as any;
-          const remoteEntries = data?.preferences?.browser_vault_entries;
-          if (Array.isArray(remoteEntries) && remoteEntries.length > 0) {
-            const byId = new Map<string, StoredVaultEntry>();
-            for (const e of [...entries, ...remoteEntries]) {
-              if (e?.id) byId.set(String(e.id), e);
-            }
-            entries = Array.from(byId.values());
-          }
-        }
-      } catch {
-        // Keep Edge store entries cleanly
       }
+
+      const filtered = domainFilter
+        ? loaded.entries.filter((e) =>
+            String(e.domain || '')
+              .toLowerCase()
+              .includes(domainFilter)
+          )
+        : loaded.entries;
+
+      return jsonEdgeResponse(
+        {
+          entries: filtered.map((e) => redactVaultEntry(e, includeEncrypted)),
+        },
+        200,
+        request,
+        undefined,
+        env
+      );
     }
 
-    const filtered = domainFilter
-      ? entries.filter((e) =>
-          String(e.domain || '')
-            .toLowerCase()
-            .includes(domainFilter)
-        )
-      : entries;
+    if (request.method === 'POST') {
+      const loaded = await fetchUserVaultEntries(upstreamOrigin, authHeader);
+      if (!loaded.ok) {
+        return jsonEdgeResponse(
+          { error: 'Could not verify user vault session.' },
+          loaded.status === 401 || loaded.status === 403 ? loaded.status : 502,
+          request,
+          undefined,
+          env
+        );
+      }
 
-    return jsonEdgeResponse(
-      {
-        entries: filtered.map((e) => redactVaultEntry(e, includeEncrypted)),
-      },
-      200,
-      request
-    );
-  }
+      const body = (await request.json().catch(() => ({}))) as Partial<StoredVaultEntry>;
+      if (!body.domain || !body.encryptedPayload || !body.iv) {
+        return jsonEdgeResponse(
+          { error: 'domain, encryptedPayload, and iv are required.' },
+          400,
+          request,
+          undefined,
+          env
+        );
+      }
 
-  if (request.method === 'POST') {
-    const body = (await request.json().catch(() => ({}))) as Partial<StoredVaultEntry>;
-    const id = String(body.id || `vault_${Date.now()}`);
-    const entry: StoredVaultEntry = {
-      ...body,
-      id,
-      domain: String(body.domain || '').toLowerCase(),
-      mode: String(body.mode || 'session'),
-      updatedAt: String(body.updatedAt || new Date().toISOString()),
-    };
+      const id = String(body.id || `vault_${Date.now()}`);
+      const entry: StoredVaultEntry = {
+        ...body,
+        id,
+        domain: String(body.domain).trim().toLowerCase(),
+        mode: body.mode === 'credentials' ? 'credentials' : 'session',
+        updatedAt: String(body.updatedAt || new Date().toISOString()),
+      };
 
-    const existingIdx = edgeVaultStore.findIndex((e) => e.id === id);
-    if (existingIdx >= 0) {
-      edgeVaultStore[existingIdx] = entry;
-    } else {
-      edgeVaultStore.unshift(entry);
-    }
+      const entries = [...loaded.entries];
+      const existingIdx = entries.findIndex((e) => e.id === id);
+      if (existingIdx >= 0) {
+        entries[existingIdx] = entry;
+      } else {
+        entries.unshift(entry);
+      }
 
-    if (authHeader) {
-      await fetchWithTimeout(
+      const saveRes = await fetchWithTimeout(
         `${upstreamOrigin}/api/v1/user/preferences`,
         {
           method: 'POST',
           headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ browser_vault_entries: edgeVaultStore }),
+          body: JSON.stringify({ browser_vault_entries: entries }),
         },
-        5000
-      ).catch(() => {});
+        5500
+      );
+      if (!saveRes.ok) {
+        return jsonEdgeResponse(
+          { error: 'Failed to persist vault entry.' },
+          saveRes.status === 401 || saveRes.status === 403 ? saveRes.status : 502,
+          request,
+          undefined,
+          env
+        );
+      }
+
+      return jsonEdgeResponse(
+        {
+          success: true,
+          entry: redactVaultEntry(entry, includeEncrypted),
+          entries: entries.map((e) => redactVaultEntry(e, includeEncrypted)),
+        },
+        200,
+        request,
+        undefined,
+        env
+      );
     }
 
-    return jsonEdgeResponse(
-      {
-        success: true,
-        entry: redactVaultEntry(entry, includeEncrypted),
-        entries: edgeVaultStore.map((e) => redactVaultEntry(e, includeEncrypted)),
-      },
-      200,
-      request
-    );
-  }
+    if (request.method === 'DELETE') {
+      const loaded = await fetchUserVaultEntries(upstreamOrigin, authHeader);
+      if (!loaded.ok) {
+        return jsonEdgeResponse(
+          { error: 'Could not verify user vault session.' },
+          loaded.status === 401 || loaded.status === 403 ? loaded.status : 502,
+          request,
+          undefined,
+          env
+        );
+      }
 
-  if (request.method === 'DELETE') {
-    const body = (await request.json().catch(() => ({}))) as { id?: string };
-    const targetId = String(incomingUrl.searchParams.get('id') || body.id || '').trim();
-    if (targetId) {
-      const idx = edgeVaultStore.findIndex((e) => e.id === targetId);
-      if (idx >= 0) edgeVaultStore.splice(idx, 1);
-    }
+      const body = (await request.json().catch(() => ({}))) as { id?: string };
+      const targetId = String(incomingUrl.searchParams.get('id') || body.id || '').trim();
+      const entries = targetId
+        ? loaded.entries.filter((e) => e.id !== targetId)
+        : loaded.entries;
 
-    if (authHeader) {
-      await fetchWithTimeout(
+      const saveRes = await fetchWithTimeout(
         `${upstreamOrigin}/api/v1/user/preferences`,
         {
           method: 'POST',
           headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ browser_vault_entries: edgeVaultStore }),
+          body: JSON.stringify({ browser_vault_entries: entries }),
         },
-        5000
-      ).catch(() => {});
+        5500
+      );
+      if (!saveRes.ok) {
+        return jsonEdgeResponse(
+          { error: 'Failed to delete vault entry.' },
+          saveRes.status === 401 || saveRes.status === 403 ? saveRes.status : 502,
+          request,
+          undefined,
+          env
+        );
+      }
+
+      return jsonEdgeResponse({ success: true, deletedId: targetId }, 200, request, undefined, env);
     }
 
-    return jsonEdgeResponse({ success: true, deletedId: targetId }, 200, request);
+    return jsonEdgeResponse({ error: 'Method not allowed' }, 405, request, undefined, env);
+  } catch (err: unknown) {
+    return jsonEdgeResponse(
+      { error: err instanceof Error ? err.message : 'Vault upstream error' },
+      502,
+      request,
+      undefined,
+      env
+    );
   }
-
-  return jsonEdgeResponse({ error: 'Method not allowed' }, 405, request);
 }

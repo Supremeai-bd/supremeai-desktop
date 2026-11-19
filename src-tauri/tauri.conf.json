@@ -25,13 +25,6 @@
       "csp": "default-src 'self' https://tauri.localhost http://tauri.localhost; connect-src 'self' ipc: http://ipc.localhost https://tauri.localhost http://tauri.localhost https: wss:; img-src 'self' data: blob: https:; font-src 'self' https://fonts.gstatic.com data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; frame-src 'self' blob: data:"
     }
   },
-  "plugins": {
-    "updater": {
-      "endpoints": [
-        "https://raw.githubusercontent.com/Supremeai-bd/supremeai-desktop/main/latest-desktop.json"
-      ]
-    }
-  },
   "bundle": {
     "active": true,
     "targets": [

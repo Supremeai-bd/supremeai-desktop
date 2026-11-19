@@ -34,6 +34,26 @@ jobs:
         shell: bash
         run: npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
 
+      - name: Run Security Unit Tests
+        shell: bash
+        run: npm run test:security
+
+      - name: Typecheck Cloudflare Edge Functions
+        shell: bash
+        run: |
+          npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler --skipLibCheck \
+            functions/_lib/edgeHelpers.ts \
+            'functions/api/[[path]].ts' \
+            'functions/api/admin/[[path]].ts' \
+            functions/api/workspace/browser-proxy.ts \
+            functions/api/workspace/browser-vault.ts \
+            functions/api/workspace/browser-schedules.ts \
+            functions/api/workspace/gmail-session.ts \
+            functions/api/workspace/terminal.ts \
+            'functions/api/auth/totp/[[path]].ts' \
+            functions/api/auth/verify-2fa.ts \
+            'functions/api/git/oauth/[[path]].ts'
+
       - name: Typecheck & Build Web Bundle
         shell: bash
         run: npm run build:web

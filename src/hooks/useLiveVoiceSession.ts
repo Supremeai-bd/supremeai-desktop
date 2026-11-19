@@ -624,7 +624,12 @@ export function useLiveVoiceSession({
         }
 
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${wsProtocol}//${window.location.host}/api/live`;
+        const storedToken =
+          typeof window !== 'undefined'
+            ? (localStorage.getItem('supremeai_access_token') || '').trim()
+            : '';
+        const wsTokenParam = storedToken ? `?token=${encodeURIComponent(storedToken)}` : '';
+        const wsUrl = `${wsProtocol}//${window.location.host}/api/live${wsTokenParam}`;
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 

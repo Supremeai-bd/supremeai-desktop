@@ -22,14 +22,47 @@ pub struct AdminSession {
     pub email: String,
 }
 
-/// Tokens are kept only in process memory; they are never returned to the WebView
-/// or written to localStorage, the filesystem, or an application preference store.
+/// Tokens are kept in process memory and optionally persisted with 0600 permissions;
+/// they are never returned to the WebView or written to localStorage.
 #[derive(Default)]
 pub struct AdminSessionState {
     session: Mutex<Option<AdminSession>>,
+    pending_cookies: Mutex<Vec<String>>,
 }
 
 const ADMIN_SESSION_FILE: &str = "admin_session.json";
+
+fn write_restricted_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)?;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes)
+    }
+}
+
+fn extract_set_cookies(headers: &reqwest::header::HeaderMap) -> Vec<String> {
+    headers
+        .get_all(reqwest::header::SET_COOKIE)
+        .iter()
+        .filter_map(|val| val.to_str().ok())
+        .filter_map(|raw| raw.split(';').next().map(str::trim))
+        .filter(|pair| pair.contains('=') && !pair.starts_with('='))
+        .map(str::to_string)
+        .collect()
+}
 
 fn admin_session_file(app: &AppHandle) -> Option<std::path::PathBuf> {
     let dir = app.path().app_config_dir().ok()?;
@@ -47,7 +80,7 @@ fn persist_session(app: &AppHandle, session: &AdminSession) {
     }
     if let Some(path) = admin_session_file(app) {
         if let Ok(bytes) = serde_json::to_vec(session) {
-            let _ = std::fs::write(path, bytes);
+            let _ = write_restricted_file(&path, &bytes);
         }
     }
 }
@@ -174,10 +207,14 @@ pub async fn admin_login(
         .send()
         .await
         .map_err(|_| "The SupremeAI authentication service could not be reached.".to_string())?;
+    let set_cookies = extract_set_cookies(response.headers());
     let data = parse_json_response(response, "login").await?;
 
     match data.get("status").and_then(Value::as_str).unwrap_or_default() {
         "otp_required" => {
+            if let Ok(mut pending) = state.pending_cookies.lock() {
+                *pending = set_cookies;
+            }
             return Ok(AdminLoginResult {
                 status: "otp_required".to_string(),
                 role: None,
@@ -185,13 +222,20 @@ pub async fn admin_login(
             });
         }
         "totp_setup_required" => {
+            if let Ok(mut pending) = state.pending_cookies.lock() {
+                *pending = set_cookies;
+            }
             return Ok(AdminLoginResult {
                 status: "totp_setup_required".to_string(),
                 role: None,
                 email: Some(email),
             });
         }
-        "authenticated" | "trusted_browser" => {}
+        "authenticated" | "trusted_browser" => {
+            if let Ok(mut pending) = state.pending_cookies.lock() {
+                pending.clear();
+            }
+        }
         _ => return Err("The owner sign-in could not be completed.".to_string()),
     }
 
@@ -231,13 +275,26 @@ pub async fn admin_verify_totp(
         return Err("Enter the six-digit verification code.".to_string());
     }
     let http = client()?;
-    let response = http
+    let pending_cookie_header = state
+        .pending_cookies
+        .lock()
+        .ok()
+        .filter(|cookies| !cookies.is_empty())
+        .map(|cookies| cookies.join("; "));
+    let mut request = http
         .post(format!("{GATEWAY_API}/api/admin/totp-verify"))
-        .json(&json!({ "otp": otp, "remember_browser": true }))
+        .json(&json!({ "otp": otp, "remember_browser": true }));
+    if let Some(cookie_header) = pending_cookie_header {
+        request = request.header(reqwest::header::COOKIE, cookie_header);
+    }
+    let response = request
         .send()
         .await
         .map_err(|_| "The SupremeAI authentication service could not be reached.".to_string())?;
     let data = parse_json_response(response, "login").await?;
+    if let Ok(mut pending) = state.pending_cookies.lock() {
+        pending.clear();
+    }
     let token = data
         .get("token")
         .and_then(Value::as_str)
@@ -300,6 +357,9 @@ pub async fn admin_logout(app: AppHandle, state: State<'_, AdminSessionState>) -
         .lock()
         .map_err(|_| "The admin session could not be cleared.".to_string())?
         .take();
+    if let Ok(mut pending) = state.pending_cookies.lock() {
+        pending.clear();
+    }
     // Explicit sign-out also clears the persisted session file.
     let _ = admin_session_file(&app).map(|path| std::fs::remove_file(path));
     if let Some(session) = session {
@@ -316,12 +376,22 @@ pub async fn admin_logout(app: AppHandle, state: State<'_, AdminSessionState>) -
 
 #[cfg(test)]
 mod tests {
-    use super::admin_login_path;
+    use super::{admin_login_path, extract_set_cookies};
 
     #[test]
     fn desktop_admin_login_only_allows_platform_owner() {
         assert_eq!(admin_login_path("owner").unwrap(), "/api/admin/login");
         assert!(admin_login_path("tenant_admin").is_err());
         assert!(admin_login_path("unknown").is_err());
+    }
+
+    #[test]
+    fn extract_set_cookies_strips_attributes() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.append(
+            reqwest::header::SET_COOKIE,
+            "admin_challenge=abc123; Path=/; HttpOnly; Secure".parse().unwrap(),
+        );
+        assert_eq!(extract_set_cookies(&headers), vec!["admin_challenge=abc123"]);
     }
 }

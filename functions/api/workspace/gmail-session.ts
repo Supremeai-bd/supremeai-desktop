@@ -12,31 +12,33 @@ import {
   sealGmailSessionCookie,
   unsealGmailSessionCookie,
 } from '../../../src/shared/gmailSessionCrypto';
+import { applyCorsHeaders } from '../../_lib/edgeHelpers';
 
 interface PagesContext {
   request: Request;
   env?: Record<string, string | undefined>;
 }
 
-function getEdgeSecret(env: Record<string, string | undefined>, origin: string): string {
+function getEdgeSecret(env: Record<string, string | undefined>): string {
   return (
     env.GMAIL_SESSION_SECRET?.trim() ||
     env.ADMIN_JWT_SECRET?.trim() ||
     env.SESSION_SECRET?.trim() ||
-    `${origin}::${env.CLOUDFLARE_ACCOUNT_ID || 'supremeai-edge-seal'}`
+    ''
   );
 }
 
-function buildHeaders(origin: string, setCookie?: string): Headers {
+function buildHeaders(
+  requestOrigin: string | null,
+  incomingOrigin: string,
+  env: Record<string, string | undefined>,
+  setCookie?: string
+): Headers {
   const headers = new Headers({
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Allow-Credentials': 'true',
-    Vary: 'Origin',
   });
+  applyCorsHeaders(headers, requestOrigin, incomingOrigin, env);
   if (setCookie) {
     headers.set('Set-Cookie', setCookie);
   }
@@ -46,7 +48,7 @@ function buildHeaders(origin: string, setCookie?: string): Headers {
 export async function onRequest(context: PagesContext): Promise<Response> {
   const { request, env = {} } = context;
   const reqUrl = new URL(request.url);
-  const origin = request.headers.get('Origin') || reqUrl.origin;
+  const requestOrigin = request.headers.get('Origin');
   const forwardedProto = (request.headers.get('x-forwarded-proto') || '').toLowerCase();
   const forwardedHeader = (request.headers.get('forwarded') || '').toLowerCase();
   const refererHeader = (request.headers.get('referer') || '').toLowerCase();
@@ -54,12 +56,39 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     reqUrl.protocol === 'https:' ||
     forwardedProto.includes('https') ||
     forwardedHeader.includes('proto=https') ||
-    origin.toLowerCase().startsWith('https://') ||
+    (requestOrigin || '').toLowerCase().startsWith('https://') ||
     refererHeader.startsWith('https://');
-  const secret = getEdgeSecret(env, reqUrl.origin);
+  const secret = getEdgeSecret(env);
 
   if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: buildHeaders(origin) });
+    return new Response(null, {
+      status: 204,
+      headers: buildHeaders(requestOrigin, reqUrl.origin, env),
+    });
+  }
+
+  if (request.method === 'DELETE') {
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: buildHeaders(
+        requestOrigin,
+        reqUrl.origin,
+        env,
+        buildGmailSessionSetCookie('', 0, isHttps)
+      ),
+    });
+  }
+
+  if (!secret || secret.length < 16) {
+    return new Response(
+      JSON.stringify({
+        error: 'Gmail session sealing secret is not configured on the server.',
+      }),
+      {
+        status: 503,
+        headers: buildHeaders(requestOrigin, reqUrl.origin, env),
+      }
+    );
   }
 
   if (request.method === 'GET') {
@@ -70,21 +99,26 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     if (!rawCookie) {
       return new Response(JSON.stringify({ authenticated: false }), {
         status: 401,
-        headers: buildHeaders(origin),
+        headers: buildHeaders(requestOrigin, reqUrl.origin, env),
       });
     }
     const payload = await unsealGmailSessionCookie(rawCookie, secret);
     if (!payload) {
       return new Response(JSON.stringify({ authenticated: false }), {
         status: 401,
-        headers: buildHeaders(origin, buildGmailSessionSetCookie('', 0, isHttps)),
+        headers: buildHeaders(
+          requestOrigin,
+          reqUrl.origin,
+          env,
+          buildGmailSessionSetCookie('', 0, isHttps)
+        ),
       });
     }
     const requestedUid = (reqUrl.searchParams.get('uid') || '').trim();
     if (requestedUid && payload.uid && payload.uid !== requestedUid) {
       return new Response(JSON.stringify({ authenticated: false }), {
         status: 401,
-        headers: buildHeaders(origin),
+        headers: buildHeaders(requestOrigin, reqUrl.origin, env),
       });
     }
     return new Response(
@@ -95,7 +129,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         uid: payload.uid,
         expiresAt: payload.exp,
       }),
-      { status: 200, headers: buildHeaders(origin) }
+      { status: 200, headers: buildHeaders(requestOrigin, reqUrl.origin, env) }
     );
   }
 
@@ -110,7 +144,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       if (!accessToken) {
         return new Response(JSON.stringify({ error: 'accessToken is required.' }), {
           status: 400,
-          headers: buildHeaders(origin),
+          headers: buildHeaders(requestOrigin, reqUrl.origin, env),
         });
       }
       const sealed = await sealGmailSessionCookie(
@@ -124,7 +158,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       if (!sealed) {
         return new Response(JSON.stringify({ error: 'Session encryption unavailable.' }), {
           status: 500,
-          headers: buildHeaders(origin),
+          headers: buildHeaders(requestOrigin, reqUrl.origin, env),
         });
       }
       return new Response(
@@ -135,7 +169,9 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         {
           status: 200,
           headers: buildHeaders(
-            origin,
+            requestOrigin,
+            reqUrl.origin,
+            env,
             buildGmailSessionSetCookie(sealed, GMAIL_SESSION_TTL_SECONDS, isHttps)
           ),
         }
@@ -143,20 +179,13 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     } catch {
       return new Response(JSON.stringify({ error: 'Invalid JSON payload.' }), {
         status: 400,
-        headers: buildHeaders(origin),
+        headers: buildHeaders(requestOrigin, reqUrl.origin, env),
       });
     }
   }
 
-  if (request.method === 'DELETE') {
-    return new Response(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: buildHeaders(origin, buildGmailSessionSetCookie('', 0, isHttps)),
-    });
-  }
-
   return new Response(JSON.stringify({ error: 'Method not allowed.' }), {
     status: 405,
-    headers: buildHeaders(origin),
+    headers: buildHeaders(requestOrigin, reqUrl.origin, env),
   });
 }

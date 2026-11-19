@@ -4,19 +4,32 @@ import {
   jsonEdgeResponse,
   resolveUpstreamOrigin,
   fetchWithTimeout,
+  safeEdgeFetch,
 } from '../../_lib/edgeHelpers';
 
 export async function onRequest(context: PagesContext): Promise<Response> {
   const { request, env } = context;
-  if (request.method === 'OPTIONS') return handleCorsPreflight(request);
+  if (request.method === 'OPTIONS') return handleCorsPreflight(request, env);
   if (request.method !== 'POST') {
-    return jsonEdgeResponse({ error: 'Method not allowed', exitCode: 1 }, 405, request);
+    return jsonEdgeResponse({ error: 'Method not allowed', exitCode: 1 }, 405, request, undefined, env);
+  }
+
+  const authHeader = (request.headers.get('Authorization') || '').trim();
+  const keyHeader = (request.headers.get('X-SupremeAI-Key') || '').trim();
+  if (!authHeader.startsWith('Bearer ') && !keyHeader) {
+    return jsonEdgeResponse(
+      { error: 'Authentication is required.', exitCode: 1 },
+      401,
+      request,
+      undefined,
+      env
+    );
   }
 
   const body = (await request.json().catch(() => ({}))) as { command?: string };
   const rawCommand = String(body.command || '').trim();
   if (!rawCommand) {
-    return jsonEdgeResponse({ error: 'Command cannot be empty.', exitCode: 1 }, 400, request);
+    return jsonEdgeResponse({ error: 'Command cannot be empty.', exitCode: 1 }, 400, request, undefined, env);
   }
 
   const parts = rawCommand.split(/\s+/);
@@ -119,12 +132,14 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       return jsonEdgeResponse(
         { exitCode: 1, stderr: `ping: invalid HTTP URL "${rawTarget}"` },
         200,
-        request
+        request,
+        undefined,
+        env
       );
     }
     const started = Date.now();
     try {
-      const res = await fetchWithTimeout(rawTarget, { method: 'GET' }, 5000);
+      const res = await safeEdgeFetch(rawTarget, { method: 'GET' }, 5000);
       const latencyMs = Date.now() - started;
       return jsonEdgeResponse(
         {
@@ -132,7 +147,9 @@ export async function onRequest(context: PagesContext): Promise<Response> {
           stdout: `HTTP ${res.status} ${res.statusText} · ${latencyMs}ms · ${rawTarget}`,
         },
         200,
-        request
+        request,
+        undefined,
+        env
       );
     } catch (err: unknown) {
       return jsonEdgeResponse(
@@ -141,7 +158,9 @@ export async function onRequest(context: PagesContext): Promise<Response> {
           stderr: err instanceof Error ? err.message : 'Edge ping failed',
         },
         200,
-        request
+        request,
+        undefined,
+        env
       );
     }
   }

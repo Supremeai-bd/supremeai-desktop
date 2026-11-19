@@ -23,26 +23,89 @@ export function resolveMcpRpcUrl(env?: Record<string, string | undefined>): stri
   return `${resolveMcpTowerOrigin(env)}/agents/${agentKey}/mcp`;
 }
 
-export function applyCorsHeaders(headers: Headers, requestOrigin: string): void {
-  headers.set('Access-Control-Allow-Origin', requestOrigin || '*');
+const DEFAULT_ALLOWED_EDGE_ORIGINS = [
+  'https://supremeai-studio.pages.dev',
+  'https://supremeai.studio',
+  'https://www.supremeai.studio',
+  'https://tauri.localhost',
+  'tauri://localhost',
+];
+
+export function isAllowedEdgeOrigin(
+  requestOrigin: string | null | undefined,
+  incomingOrigin: string,
+  env?: Record<string, string | undefined>
+): boolean {
+  const clean = String(requestOrigin || '').trim();
+  if (!clean) return true;
+  if (clean === incomingOrigin) return true;
+  if (DEFAULT_ALLOWED_EDGE_ORIGINS.includes(clean)) return true;
+
+  const extra = (env?.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  if (extra.includes(clean)) return true;
+
+  try {
+    const parsed = new URL(clean);
+    const host = parsed.hostname.toLowerCase();
+    if (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      (host === 'localhost' || host === '127.0.0.1')
+    ) {
+      return true;
+    }
+    if (
+      parsed.protocol === 'https:' &&
+      (host.endsWith('.supremeai-studio.pages.dev') || host.endsWith('.supremeai.studio'))
+    ) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+export function applyCorsHeaders(
+  headers: Headers,
+  requestOrigin: string | null | undefined,
+  incomingOrigin?: string,
+  env?: Record<string, string | undefined>
+): void {
+  const cleanOrigin = String(requestOrigin || '').trim();
+  const baseOrigin = String(incomingOrigin || '').trim();
+  const effectiveOrigin = cleanOrigin || baseOrigin;
+
+  headers.set('Vary', 'Origin');
   headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   headers.set(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, X-SupremeAI-Key, Accept, Cache-Control, X-Vault-Cookie'
+    'Content-Type, Authorization, X-SupremeAI-Key, X-Admin-Token, Accept, Cache-Control, X-Vault-Cookie'
   );
   headers.set(
     'Access-Control-Expose-Headers',
     'X-SupremeAI-Provider, X-SupremeAI-Slot, X-SupremeAI-Tier, X-SupremeAI-Cache'
   );
-  headers.set('Access-Control-Allow-Credentials', 'true');
-  headers.set('Vary', 'Origin');
+
+  if (effectiveOrigin && isAllowedEdgeOrigin(cleanOrigin, baseOrigin, env)) {
+    headers.set('Access-Control-Allow-Origin', effectiveOrigin);
+    headers.set('Access-Control-Allow-Credentials', 'true');
+  } else {
+    headers.delete('Access-Control-Allow-Origin');
+    headers.delete('Access-Control-Allow-Credentials');
+  }
 }
 
-export function handleCorsPreflight(request: Request): Response {
+export function handleCorsPreflight(
+  request: Request,
+  env?: Record<string, string | undefined>
+): Response {
   const incomingUrl = new URL(request.url);
-  const requestOrigin = request.headers.get('Origin') || incomingUrl.origin;
+  const requestOrigin = request.headers.get('Origin');
   const headers = new Headers({ 'Access-Control-Max-Age': '86400' });
-  applyCorsHeaders(headers, requestOrigin);
+  applyCorsHeaders(headers, requestOrigin, incomingUrl.origin, env);
   return new Response(null, { status: 204, headers });
 }
 
@@ -50,18 +113,108 @@ export function jsonEdgeResponse(
   data: unknown,
   status: number,
   request: Request,
-  extraHeaders?: Record<string, string>
+  extraHeaders?: Record<string, string>,
+  env?: Record<string, string | undefined>
 ): Response {
   const incomingUrl = new URL(request.url);
-  const requestOrigin = request.headers.get('Origin') || incomingUrl.origin;
+  const requestOrigin = request.headers.get('Origin');
   const headers = new Headers({ 'Content-Type': 'application/json; charset=utf-8' });
   if (extraHeaders) {
     for (const [k, v] of Object.entries(extraHeaders)) {
       headers.set(k, v);
     }
   }
-  applyCorsHeaders(headers, requestOrigin);
+  applyCorsHeaders(headers, requestOrigin, incomingUrl.origin, env);
   return new Response(JSON.stringify(data), { status, headers });
+}
+
+export function timingSafeEqualStrings(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const aBytes = enc.encode(a);
+  const bBytes = enc.encode(b);
+  if (aBytes.length !== bBytes.length || aBytes.length === 0) return false;
+  let diff = 0;
+  for (let i = 0; i < aBytes.length; i++) {
+    diff |= aBytes[i] ^ bBytes[i];
+  }
+  return diff === 0;
+}
+
+export function isSafeGitHubRepoSlug(repo: string): boolean {
+  const trimmed = String(repo || '').trim();
+  if (!trimmed || trimmed.includes('..')) return false;
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(trimmed);
+}
+
+export function validateEdgeGitLabHost(
+  rawHost: string | null | undefined,
+  configuredHost?: string
+): { valid: true; origin: string } | { valid: false; reason: string } {
+  const fallback = (configuredHost || 'https://gitlab.com').trim().replace(/\/+$/, '');
+  const candidate = (rawHost || '').trim().replace(/\/+$/, '') || fallback;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return { valid: false, reason: 'Invalid GitLab host URL.' };
+  }
+
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+    return { valid: false, reason: 'GitLab host must be a valid https:// origin.' };
+  }
+  if (parsed.pathname !== '/' && parsed.pathname !== '') {
+    return { valid: false, reason: 'GitLab host must not include a path.' };
+  }
+
+  const allowedOrigins = new Set<string>(['https://gitlab.com']);
+  if (configuredHost?.trim()) {
+    try {
+      const cfg = new URL(configuredHost.trim());
+      if (cfg.protocol === 'https:') allowedOrigins.add(cfg.origin);
+    } catch {
+      // ignore invalid env value
+    }
+  }
+
+  if (!allowedOrigins.has(parsed.origin)) {
+    return {
+      valid: false,
+      reason: 'Untrusted GitLab host. Only https://gitlab.com or configured GITLAB_HOST is permitted.',
+    };
+  }
+  return { valid: true, origin: parsed.origin };
+}
+
+export function isRestrictedEdgeHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (!host) return true;
+  if (
+    host === 'localhost' ||
+    host === '0.0.0.0' ||
+    host === '::' ||
+    host === '::1' ||
+    host === '169.254.169.254' ||
+    host === 'metadata.google.internal' ||
+    host === 'metadata' ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host.endsWith('.localhost') ||
+    host.startsWith('127.') ||
+    host.startsWith('10.') ||
+    host.startsWith('192.168.') ||
+    host.startsWith('169.254.') ||
+    host.startsWith('0.') ||
+    host.startsWith('fc') ||
+    host.startsWith('fd') ||
+    host.startsWith('fe80:') ||
+    host.startsWith('::ffff:') ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+    /^100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\./.test(host)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export async function fetchWithTimeout(
@@ -76,6 +229,53 @@ export async function fetchWithTimeout(
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function safeEdgeFetch(
+  initialUrl: string | URL,
+  init: RequestInit = {},
+  timeoutMs: number = 10000,
+  maxRedirects: number = 5
+): Promise<Response> {
+  let currentUrl = typeof initialUrl === 'string' ? new URL(initialUrl) : initialUrl;
+  let currentInit: RequestInit = { ...init, redirect: 'manual' };
+
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    if (currentUrl.protocol !== 'http:' && currentUrl.protocol !== 'https:') {
+      throw new Error('Only http:// and https:// URLs are permitted.');
+    }
+    if (isRestrictedEdgeHost(currentUrl.hostname)) {
+      throw new Error('Access to private network or metadata addresses is restricted.');
+    }
+
+    const res = await fetchWithTimeout(currentUrl.toString(), currentInit, timeoutMs);
+    if (
+      res.status === 301 ||
+      res.status === 302 ||
+      res.status === 303 ||
+      res.status === 307 ||
+      res.status === 308
+    ) {
+      const location = res.headers.get('location');
+      if (!location) return res;
+      if (hop === maxRedirects) {
+        throw new Error('Too many redirects.');
+      }
+      currentUrl = new URL(location, currentUrl);
+      if (
+        res.status === 303 ||
+        ((res.status === 301 || res.status === 302) &&
+          currentInit.method &&
+          currentInit.method.toUpperCase() === 'POST')
+      ) {
+        currentInit = { ...currentInit, method: 'GET', body: undefined };
+      }
+      continue;
+    }
+    return res;
+  }
+
+  throw new Error('Redirect limit exceeded.');
 }
 
 export async function mintOrExtractAuthHeaders(

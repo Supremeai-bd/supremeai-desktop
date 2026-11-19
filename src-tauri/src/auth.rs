@@ -44,9 +44,43 @@ fn client() -> Result<reqwest::Client, String> {
 }
 
 fn supabase_anon_key() -> Result<String, String> {
-    std::env::var("SUPREMEAI_SUPABASE_ANON_KEY").map_err(|_| {
-        "User sign-in is not configured on this device (missing SUPREMEAI_SUPABASE_ANON_KEY).".to_string()
-    })
+    if let Ok(value) = std::env::var("SUPREMEAI_SUPABASE_ANON_KEY") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    if let Some(compiled) = option_env!("SUPREMEAI_SUPABASE_ANON_KEY") {
+        let trimmed = compiled.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    Err(
+        "User sign-in is not configured on this device (missing SUPREMEAI_SUPABASE_ANON_KEY)."
+            .to_string(),
+    )
+}
+
+fn write_restricted_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)?;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes)
+    }
 }
 
 fn config_dir_file(app: &AppHandle, name: &str) -> Option<std::path::PathBuf> {
@@ -63,7 +97,7 @@ fn persist_user_session(app: &AppHandle, session: &UserSession) {
     }
     if let Some(path) = config_dir_file(app, USER_SESSION_FILE) {
         if let Ok(bytes) = serde_json::to_vec(session) {
-            let _ = std::fs::write(path, bytes);
+            let _ = write_restricted_file(&path, &bytes);
         }
     }
 }
@@ -203,7 +237,8 @@ fn write_keystore(app: &AppHandle, store: serde_json::Map<String, Value>) -> Res
     };
     let bytes = serde_json::to_vec(&Value::Object(store))
         .map_err(|_| "The secure store could not be encoded.".to_string())?;
-    std::fs::write(path, bytes).map_err(|_| "The secure store could not be saved.".to_string())
+    write_restricted_file(&path, &bytes)
+        .map_err(|_| "The secure store could not be saved.".to_string())
 }
 
 #[tauri::command]

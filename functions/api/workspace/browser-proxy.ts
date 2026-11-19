@@ -12,6 +12,11 @@ import {
   extractCapturedCookieHeader,
   processProxiedHtml,
 } from '../../../src/shared/browserProxyHtml';
+import {
+  applyCorsHeaders,
+  isRestrictedEdgeHost,
+  safeEdgeFetch,
+} from '../../_lib/edgeHelpers';
 
 interface PagesContext {
   request: Request;
@@ -19,35 +24,6 @@ interface PagesContext {
 }
 
 const DEFAULT_UPSTREAM_ORIGIN = 'https://supremeai-api-ulw0.onrender.com';
-
-function applyCorsHeaders(headers: Headers, requestOrigin: string): void {
-  headers.set('Access-Control-Allow-Origin', requestOrigin);
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  headers.set(
-    'Access-Control-Allow-Headers',
-    'Content-Type, Accept, Cache-Control, X-Vault-Cookie'
-  );
-  headers.set('Access-Control-Allow-Credentials', 'true');
-  headers.set('Vary', 'Origin');
-}
-
-function isRestrictedHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  return (
-    host === 'localhost' ||
-    host === '0.0.0.0' ||
-    host === '::1' ||
-    host === '169.254.169.254' ||
-    host.startsWith('127.') ||
-    host.startsWith('10.') ||
-    host.startsWith('192.168.') ||
-    host.startsWith('169.254.') ||
-    host.startsWith('fc') ||
-    host.startsWith('fd') ||
-    host.startsWith('fe80:') ||
-    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
-  );
-}
 
 interface ProxyRequestPayload {
   url: string;
@@ -62,16 +38,31 @@ interface ProxyRequestPayload {
 export async function onRequest(context: PagesContext): Promise<Response> {
   const { request, env = {} } = context;
   const incomingUrl = new URL(request.url);
-  const requestOrigin = request.headers.get('Origin') || incomingUrl.origin;
+  const requestOrigin = request.headers.get('Origin');
 
   if (request.method === 'OPTIONS') {
     const preflight = new Headers({ 'Access-Control-Max-Age': '86400' });
-    applyCorsHeaders(preflight, requestOrigin);
+    applyCorsHeaders(preflight, requestOrigin, incomingUrl.origin, env);
     return new Response(null, { status: 204, headers: preflight });
   }
 
   const jsonHeaders = new Headers({ 'Content-Type': 'application/json; charset=utf-8' });
-  applyCorsHeaders(jsonHeaders, requestOrigin);
+  applyCorsHeaders(jsonHeaders, requestOrigin, incomingUrl.origin, env);
+
+  const authHeader = (request.headers.get('Authorization') || '').trim();
+  const keyHeader = (request.headers.get('X-SupremeAI-Key') || '').trim();
+  const cookieHeader = request.headers.get('Cookie') || '';
+  const hasSessionAuth =
+    authHeader.startsWith('Bearer ') ||
+    Boolean(keyHeader) ||
+    cookieHeader.includes('supremeai_admin_session=') ||
+    cookieHeader.includes('supremeai_refresh_token=');
+  if (!hasSessionAuth) {
+    return new Response(
+      JSON.stringify({ error: 'Authentication is required to use the workspace browser proxy.' }),
+      { status: 401, headers: jsonHeaders }
+    );
+  }
 
   let payload: ProxyRequestPayload = {
     url: (incomingUrl.searchParams.get('url') || '').trim(),
@@ -152,7 +143,10 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       p.startsWith('/api/auth') ||
       p.startsWith('/api/v1/auth') ||
       p.startsWith('/api/billing') ||
-      p.startsWith('/api/workspace/gmail-session')
+      p.startsWith('/api/workspace') ||
+      p.startsWith('/api/api-keys') ||
+      p.startsWith('/api/v1/api-keys') ||
+      p.startsWith('/metrics')
     ) {
       return new Response(
         JSON.stringify({
@@ -161,7 +155,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         { status: 403, headers: jsonHeaders }
       );
     }
-  } else if (isRestrictedHost(parsed.hostname)) {
+  } else if (isRestrictedEdgeHost(parsed.hostname)) {
     return new Response(
       JSON.stringify({ error: 'Access to private network / metadata addresses is restricted.' }),
       { status: 403, headers: jsonHeaders }
@@ -233,13 +227,15 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     }
 
     const canHaveBody = upstreamMethod !== 'GET' && upstreamMethod !== 'HEAD';
-    let response = await fetch(parsed.toString(), {
-      method: upstreamMethod,
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: upstreamHeaders,
-      body: canHaveBody && payload.body !== undefined ? payload.body : undefined,
-    });
+    let response = await safeEdgeFetch(
+      parsed,
+      {
+        method: upstreamMethod,
+        headers: upstreamHeaders,
+        body: canHaveBody && payload.body !== undefined ? payload.body : undefined,
+      },
+      14000
+    );
 
     // Fallback for strict desktop WAF / Meta edges that return 400/403 from edge PoPs
     if (
@@ -257,12 +253,14 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         'Sec-Ch-Ua-Mobile': '?1',
         'Sec-Ch-Ua-Platform': '"Android"',
       };
-      const retryRes = await fetch(mobileUrl.toString(), {
-        method: 'GET',
-        redirect: 'follow',
-        signal: controller.signal,
-        headers: mobileHeaders,
-      }).catch(() => null);
+      const retryRes = await safeEdgeFetch(
+        mobileUrl,
+        {
+          method: 'GET',
+          headers: mobileHeaders,
+        },
+        10000
+      ).catch(() => null);
       if (retryRes && retryRes.ok) {
         response = retryRes;
       }
@@ -279,12 +277,14 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         'User-Agent': 'SupremeAI-Studio-Browser/1.0 (https://supremeai-studio.pages.dev)',
         'Api-User-Agent': 'SupremeAI-Studio-Browser/1.0 (https://supremeai-studio.pages.dev)',
       };
-      const wikiRetry = await fetch(parsed.toString(), {
-        method: 'GET',
-        redirect: 'follow',
-        signal: controller.signal,
-        headers: wikiHeaders,
-      }).catch(() => null);
+      const wikiRetry = await safeEdgeFetch(
+        parsed,
+        {
+          method: 'GET',
+          headers: wikiHeaders,
+        },
+        10000
+      ).catch(() => null);
       if (wikiRetry && wikiRetry.ok) {
         response = wikiRetry;
       }
@@ -298,7 +298,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         const resolvedFinal = new URL(finalUrl);
         if (
           (resolvedFinal.protocol !== 'http:' && resolvedFinal.protocol !== 'https:') ||
-          isRestrictedHost(resolvedFinal.hostname)
+          isRestrictedEdgeHost(resolvedFinal.hostname)
         ) {
           return new Response(
             JSON.stringify({

@@ -92,12 +92,23 @@ interface RestoredGmailSession {
   uid: string;
 }
 
+function getWorkspaceAuthHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { ...(extra || {}) };
+  if (typeof window !== 'undefined') {
+    const token = (localStorage.getItem('supremeai_access_token') || '').trim();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+  }
+  return headers;
+}
+
 async function persistGmailSessionToServer(accessToken: string, user: User): Promise<void> {
   try {
     await fetch(GMAIL_SESSION_ENDPOINT, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getWorkspaceAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         accessToken,
         uid: user.uid,
@@ -117,6 +128,7 @@ async function restoreGmailSessionFromServer(
     const res = await fetch(`${GMAIL_SESSION_ENDPOINT}${query}`, {
       method: 'GET',
       credentials: 'include',
+      headers: getWorkspaceAuthHeaders(),
     });
     if (!res.ok) return null;
     const data = (await res.json()) as {
@@ -146,6 +158,7 @@ async function clearGmailSessionFromServer(): Promise<void> {
     await fetch(GMAIL_SESSION_ENDPOINT, {
       method: 'DELETE',
       credentials: 'include',
+      headers: getWorkspaceAuthHeaders(),
     });
   } catch {
     // Ignore network errors when clearing session cookie

@@ -9,9 +9,21 @@ import {
 
 export async function onRequest(context: PagesContext): Promise<Response> {
   const { request, env } = context;
-  if (request.method === 'OPTIONS') return handleCorsPreflight(request);
+  if (request.method === 'OPTIONS') return handleCorsPreflight(request, env);
   if (request.method !== 'POST') {
-    return jsonEdgeResponse({ error: 'Method not allowed' }, 405, request);
+    return jsonEdgeResponse({ error: 'Method not allowed' }, 405, request, undefined, env);
+  }
+
+  const authHeader = (request.headers.get('Authorization') || '').trim();
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  if (!bearer || bearer.startsWith('tok_guest_') || bearer.startsWith('sk-supreme-guest')) {
+    return jsonEdgeResponse(
+      { success: false, verified: false, error: 'Authentication is required for 2FA verification.' },
+      401,
+      request,
+      undefined,
+      env
+    );
   }
 
   const body = (await request.json().catch(() => ({}))) as {
@@ -22,7 +34,6 @@ export async function onRequest(context: PagesContext): Promise<Response> {
   };
   const code = String(body.token || '').trim();
   const upstreamOrigin = resolveUpstreamOrigin(env);
-  const authHeader = request.headers.get('Authorization') || '';
 
   // 1. Check user vault TOTP secret saved in preferences
   if (authHeader) {

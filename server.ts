@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { exec, execFile } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import os from 'os';
@@ -47,7 +47,9 @@ import {
   isProtectedWorkspaceFile,
   isRestrictedProxyTarget,
   parseCookieHeader,
+  resolveAndCheckProxyTarget,
   signSessionToken,
+  validateGitLabHost,
   verifyPassword,
   verifySessionToken,
 } from './src/shared/serverSecurity';
@@ -78,12 +80,22 @@ import {
   parseGitHubRepoSlug,
 } from './src/utils/projectRepoUtils';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 dotenv.config();
 const visionCooldownRegistry = new VisionCooldownRegistry();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const APP_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')) as {
+      version?: string;
+    };
+    return String(pkg.version || '2.5.0').trim();
+  } catch {
+    return '2.5.0';
+  }
+})();
 
 const portArgIndex = process.argv.indexOf('--port');
 const portEqArg = process.argv.find((arg) => arg.startsWith('--port='));
@@ -1152,7 +1164,84 @@ async function supabaseRestRequest(
 
 async function startServer() {
   const app = express();
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '15mb' }));
+
+  const isHttpsRequest = (req: Request): boolean => {
+    const protoHeader = String(req.header('x-forwarded-proto') || '').toLowerCase();
+    const forwardedHeader = String(req.header('forwarded') || '').toLowerCase();
+    const originHeader = String(req.header('origin') || '').toLowerCase();
+    const refererHeader = String(req.header('referer') || '').toLowerCase();
+    return (
+      req.secure ||
+      protoHeader.includes('https') ||
+      forwardedHeader.includes('proto=https') ||
+      originHeader.startsWith('https://') ||
+      refererHeader.startsWith('https://')
+    );
+  };
+
+  // Baseline production security headers (iframe-compatible for AI Studio preview)
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=()');
+    if (isProduction && isHttpsRequest(req)) {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+    next();
+  });
+
+  // SSRF-hardened outbound fetch helper: validates hostname + resolved DNS IPs on initial request and every redirect hop
+  const safeFetchWithRedirectCheck = async (
+    initialUrl: string | URL,
+    init: RequestInit = {},
+    isLocalRelative = false,
+    maxRedirects = 5
+  ): Promise<globalThis.Response> => {
+    let currentUrl = typeof initialUrl === 'string' ? new URL(initialUrl) : initialUrl;
+    let currentLocal = isLocalRelative;
+    let currentInit: RequestInit = { ...init, redirect: 'manual' };
+
+    for (let hop = 0; hop <= maxRedirects; hop += 1) {
+      const check = await resolveAndCheckProxyTarget(currentUrl, currentLocal);
+      if (check.restricted) {
+        throw new Error(check.reason || 'Blocked outbound request to restricted or private target.');
+      }
+
+      const response = await fetch(currentUrl.toString(), currentInit);
+      if (
+        response.status === 301 ||
+        response.status === 302 ||
+        response.status === 303 ||
+        response.status === 307 ||
+        response.status === 308
+      ) {
+        const location = response.headers.get('location');
+        if (!location) return response;
+        if (hop === maxRedirects) {
+          throw new Error('Too many redirects from upstream target.');
+        }
+        const nextUrl = new URL(location, currentUrl);
+        currentLocal =
+          currentLocal && nextUrl.origin === currentUrl.origin && nextUrl.pathname.startsWith('/');
+        currentUrl = nextUrl;
+        if (
+          response.status === 303 ||
+          ((response.status === 301 || response.status === 302) &&
+            currentInit.method &&
+            currentInit.method.toUpperCase() === 'POST')
+        ) {
+          currentInit = { ...currentInit, method: 'GET', body: undefined };
+        }
+        continue;
+      }
+      return response;
+    }
+
+    throw new Error('Redirect limit exceeded.');
+  };
 
   // Real HTTP request throughput & latency instrumentation (excludes SSE streams)
   app.use('/api', (req, res, next) => {
@@ -1171,21 +1260,16 @@ async function startServer() {
   const rateBuckets = new Map<string, number[]>();
   const makeRateLimit = (windowMs: number, max: number) => {
     return (req: Request, res: Response, next: NextFunction) => {
-      const rawIp = String(
-        req.headers['cf-connecting-ip'] ||
-          req.headers['x-forwarded-for'] ||
-          req.socket?.remoteAddress ||
-          'unknown'
-      );
-      const ip = rawIp.split(',')[0].trim();
+      const ip = String(req.ip || req.socket?.remoteAddress || 'unknown').trim();
+      const bucketKey = `${req.baseUrl || req.path}:${ip}`;
       const now = Date.now();
-      const hits = (rateBuckets.get(ip) || []).filter((t) => now - t < windowMs);
+      const hits = (rateBuckets.get(bucketKey) || []).filter((t) => now - t < windowMs);
       if (hits.length >= max) {
         res.status(429).json({ error: 'Too many requests. Please slow down and retry shortly.' });
         return;
       }
       hits.push(now);
-      rateBuckets.set(ip, hits);
+      rateBuckets.set(bucketKey, hits);
       if (rateBuckets.size > 10000) {
         for (const [k, v] of rateBuckets) {
           if (v.length === 0 || now - v[v.length - 1] > windowMs) rateBuckets.delete(k);
@@ -1195,7 +1279,16 @@ async function startServer() {
     };
   };
   app.use(['/api/chat', '/api/v1/chat', '/api/v1/stream/chat'], makeRateLimit(60_000, 60));
-  app.use('/api/auth/login', makeRateLimit(60_000, 10));
+  app.use(
+    [
+      '/api/auth/login',
+      '/api/v1/auth/login',
+      '/api/auth/verify-2fa',
+      '/api/auth/totp',
+      '/api/admin/auth/verify',
+    ],
+    makeRateLimit(60_000, 10)
+  );
   app.use('/api/mcp-tower', makeRateLimit(60_000, 30));
 
   // Cached fetch of live catalog data (models/plans) from the gateway, with a
@@ -1227,7 +1320,7 @@ async function startServer() {
       status: 'healthy',
       app: 'SupremeAI Studio',
       organization: 'Supremeai-bd',
-      version: 'v2.4.1',
+      version: `v${APP_VERSION}`,
       modelsCount: Object.keys(SUPPORTED_MODELS).length,
       plans: PLAN_CATALOG,
       repositories: {
@@ -1760,52 +1853,50 @@ async function startServer() {
     ipAddress: string;
   }
 
-  const auditRecords: ServerAuditRecord[] = [
-    {
-      id: 'audit_rec_01',
-      timestamp: 'Today at 09:40',
-      actor: 'platform-admin',
-      action: 'SERVICE_REBOOT',
-      resource: 'MCP Tower / code-auditor-worker',
-      details:
-        'Graceful reboot triggered via Admin Dashboard. Memory garbage collected, cold boot latency 28ms.',
-      ipAddress: '10.0.4.12',
-    },
-    {
-      id: 'audit_rec_02',
-      timestamp: 'Today at 08:15',
-      actor: 'platform-admin',
-      action: 'RATE_LIMIT_OVERRIDE',
-      resource: 'Customer: techcorp_labs (cust_1042)',
-      details: 'Increased RPM from 120 to 600 for Enterprise pilot rollout.',
-      ipAddress: '10.0.4.12',
-    },
-    {
-      id: 'audit_rec_03',
-      timestamp: 'Yesterday at 17:20',
-      actor: 'system-agent-scheduler',
-      action: 'AUTONOMOUS_SWARM_SCALE',
-      resource: 'Swarm Worker: solver-daemon-01',
-      details: 'Auto-scaled worker concurrency to 4 threads during high GitHub issue throughput.',
-      ipAddress: '127.0.0.1',
-    },
-    {
-      id: 'audit_rec_04',
-      timestamp: 'Apr 10, 2026',
-      actor: 'platform-admin',
-      action: 'FAILOVER_RULE_UPDATE',
-      resource: 'LLM Gateway / supreme-core',
-      details: 'Configured automated fallback to supreme-spark on 503 high demand.',
-      ipAddress: '10.0.4.12',
-    },
-  ];
+  const auditRecords: ServerAuditRecord[] = isProduction
+    ? []
+    : [
+        {
+          id: 'audit_rec_01',
+          timestamp: 'Today at 09:40',
+          actor: 'platform-admin',
+          action: 'SERVICE_REBOOT',
+          resource: 'MCP Tower / code-auditor-worker',
+          details:
+            'Graceful reboot triggered via Admin Dashboard. Memory garbage collected, cold boot latency 28ms.',
+          ipAddress: '10.0.4.12',
+        },
+        {
+          id: 'audit_rec_02',
+          timestamp: 'Today at 08:15',
+          actor: 'platform-admin',
+          action: 'RATE_LIMIT_OVERRIDE',
+          resource: 'Customer: techcorp_labs (cust_1042)',
+          details: 'Increased RPM from 120 to 600 for Enterprise pilot rollout.',
+          ipAddress: '10.0.4.12',
+        },
+        {
+          id: 'audit_rec_03',
+          timestamp: 'Yesterday at 17:20',
+          actor: 'system-agent-scheduler',
+          action: 'AUTONOMOUS_SWARM_SCALE',
+          resource: 'Swarm Worker: solver-daemon-01',
+          details: 'Auto-scaled worker concurrency to 4 threads during high GitHub issue throughput.',
+          ipAddress: '127.0.0.1',
+        },
+        {
+          id: 'audit_rec_04',
+          timestamp: 'Apr 10, 2026',
+          actor: 'platform-admin',
+          action: 'FAILOVER_RULE_UPDATE',
+          resource: 'LLM Gateway / supreme-core',
+          details: 'Configured automated fallback to supreme-spark on 503 high demand.',
+          ipAddress: '10.0.4.12',
+        },
+      ];
 
   const getClientIp = (req: Request): string => {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string' && forwarded.trim()) {
-      return forwarded.split(',')[0].trim();
-    }
-    return req.ip || '127.0.0.1';
+    return String(req.ip || req.socket?.remoteAddress || '127.0.0.1').trim();
   };
 
   const resolveAuditActor = (req?: Request, explicitActor?: unknown): string => {
@@ -1860,10 +1951,12 @@ async function startServer() {
     ]).catch(() => {});
   };
 
-  let blockedIps: { ip: string; reason: string; date: string }[] = [
-    { ip: '45.154.255.8', reason: 'Internal MCP Port Scanner', date: '2 days ago' },
-    { ip: '198.51.100.44', reason: 'Adversarial Jailbreak Payload Injection', date: 'Today' },
-  ];
+  let blockedIps: { ip: string; reason: string; date: string }[] = isProduction
+    ? []
+    : [
+        { ip: '45.154.255.8', reason: 'Internal MCP Port Scanner', date: '2 days ago' },
+        { ip: '198.51.100.44', reason: 'Adversarial Jailbreak Payload Injection', date: 'Today' },
+      ];
 
   const isIpBlocked = (req: Request): boolean => {
     const clientIp = getClientIp(req);
@@ -2019,7 +2112,9 @@ async function startServer() {
   // Seeded local user credentials removed; real accounts register or authenticate via upstream gateway.
   let usersDb: ServerUser[] = [];
 
-  let customerDirectory: ServerCustomerRecord[] = [
+  let customerDirectory: ServerCustomerRecord[] = isProduction
+    ? []
+    : [
     {
       id: 'cust_001',
       name: 'Studio Developer',
@@ -2454,7 +2549,24 @@ async function startServer() {
     },
   ];
 
-  let infisicalExtraVaultKeys = [
+  let infisicalExtraVaultKeys: Array<{
+    id: string;
+    secretName: string;
+    infisicalPath: string;
+    environment: 'prod' | 'staging' | 'dev';
+    provider: string;
+    providerDisplayName: string;
+    maskedKey: string;
+    version: number;
+    status: 'healthy' | 'degraded' | 'unhealthy' | 'untested';
+    latencyMs: number;
+    avgLatencyMs: number;
+    p95LatencyMs: number;
+    lastChecked: string;
+    lastSyncedAt: string;
+  }> = isProduction
+    ? []
+    : [
     {
       id: 'vault_infisical_gateway_master',
       secretName: 'SUPREMEAI_GATEWAY_SIGNING_KEY',
@@ -2529,7 +2641,22 @@ async function startServer() {
     return [...mappedProviders, ...infisicalExtraVaultKeys];
   };
 
-  let userApiKeysStore = [
+  let userApiKeysStore: Array<{
+    id: string;
+    name: string;
+    provider: string;
+    keyPrefix: string;
+    secretMasked: string;
+    createdAt: string;
+    lastUsed: string;
+    rateLimitRpm: number;
+    status: 'active' | 'revoked';
+    healthStatus: 'healthy' | 'degraded' | 'unhealthy' | 'untested';
+    lastChecked: string;
+    permissions: string[];
+  }> = isProduction
+    ? []
+    : [
     {
       id: 'key_prod_01',
       name: 'SupremeAI Studio Production CLI',
@@ -2779,7 +2906,7 @@ async function startServer() {
         res.cookie('supremeai_admin_session', token, {
           httpOnly: true,
           sameSite: 'lax',
-          secure: req.secure,
+          secure: isHttpsRequest(req),
           path: '/api/admin',
           maxAge: ADMIN_SESSION_TTL_MS,
         });
@@ -2931,9 +3058,12 @@ async function startServer() {
     const existingCust = customerDirectory.find((c) => c.email.toLowerCase() === cleanEmail);
     const rbac = resolveRbacUserProfile(cleanEmail, undefined, existingCust);
     const isAdmin = rbac.isAdminEligible;
-    const devEligible = isAdmin || Boolean(isDeveloperEligible) || workspaceFocus === 'developer';
-    const assignedPlan: PlanTier =
-      plan === 'Free' || plan === 'Pro' || plan === 'Enterprise' ? plan : 'Pro';
+    // Public self-signup always starts on Free (or Enterprise only for verified admin emails);
+    // paid tiers & developer roles must be granted via verified billing/admin flows.
+    const devEligible = isAdmin || Boolean(existingCust?.isDeveloperEligible);
+    const assignedPlan: PlanTier = isAdmin
+      ? 'Enterprise'
+      : existingCust?.tier || 'Free';
     const newUser: ServerUser = {
       id: `usr_${Date.now()}`,
       name: cleanName,
@@ -3209,7 +3339,7 @@ async function startServer() {
     res.cookie('supremeai_refresh_token', rotatedRefreshToken, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: req.secure,
+      secure: isHttpsRequest(req),
       path: '/api/v1/auth',
       maxAge: REFRESH_TOKEN_TTL_MS,
     });
@@ -3354,26 +3484,59 @@ async function startServer() {
   const resolveAdminEligibilityForTotp = async (req: Request, rawEmail?: string) => {
     const authHeader = String(req.headers.authorization || '').trim();
     const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-    const verifiedPayload = bearer ? verifyLocalSessionToken(bearer) : null;
-    const sessionUserId = bearer ? activeAuthSessions.get(bearer) : undefined;
-    const sessionUser = sessionUserId ? usersDb.find((u) => u.id === sessionUserId) : undefined;
+    const cookies = parseCookieHeader(req.headers.cookie);
+    const adminCookie = (cookies['supremeai_admin_session'] || '').trim();
+    const candidateToken = bearer || adminCookie;
 
-    const cleanEmail = (sessionUser?.email || verifiedPayload?.email || String(rawEmail || ''))
-      .trim()
-      .toLowerCase();
-
-    if (!cleanEmail) {
+    if (
+      !candidateToken ||
+      candidateToken.startsWith('tok_guest_') ||
+      candidateToken.startsWith('sk-supreme-guest')
+    ) {
       return { cleanEmail: '', isEligible: false };
     }
 
-    const matchedUser = usersDb.find((u) => u.email.toLowerCase() === cleanEmail);
-    const matchedCustomer = customerDirectory.find((c) => c.email.toLowerCase() === cleanEmail);
-    const rbac = resolveRbacUserProfile(cleanEmail, matchedUser, matchedCustomer);
-    if (rbac.isAdminEligible) {
-      return { cleanEmail, isEligible: true };
+    const requestedEmail = String(rawEmail || '')
+      .trim()
+      .toLowerCase();
+
+    const verifiedPayload = verifyLocalSessionToken(candidateToken);
+    const sessionUserId = activeAuthSessions.get(candidateToken);
+    const sessionUser = sessionUserId ? usersDb.find((u) => u.id === sessionUserId) : undefined;
+    const adminCookieExp = activeAdminSessions.get(candidateToken);
+
+    if (verifiedPayload || sessionUser) {
+      if (verifiedPayload?.sub === 'admin_passkey') {
+        if (!adminCookieExp || adminCookieExp <= Date.now()) {
+          activeAdminSessions.delete(candidateToken);
+          return { cleanEmail: '', isEligible: false };
+        }
+        const passkeyEmail = verifiedPayload.email.toLowerCase();
+        if (requestedEmail && requestedEmail !== passkeyEmail) {
+          return { cleanEmail: '', isEligible: false };
+        }
+        return { cleanEmail: passkeyEmail, isEligible: true };
+      }
+
+      const verifiedEmail = (sessionUser?.email || verifiedPayload?.email || '')
+        .trim()
+        .toLowerCase();
+      if (!verifiedEmail) {
+        return { cleanEmail: '', isEligible: false };
+      }
+      if (requestedEmail && requestedEmail !== verifiedEmail) {
+        return { cleanEmail: '', isEligible: false };
+      }
+      const matchedUser =
+        sessionUser || usersDb.find((u) => u.email.toLowerCase() === verifiedEmail);
+      const matchedCustomer = customerDirectory.find(
+        (c) => c.email.toLowerCase() === verifiedEmail
+      );
+      const rbac = resolveRbacUserProfile(verifiedEmail, matchedUser, matchedCustomer);
+      return { cleanEmail: verifiedEmail, isEligible: rbac.isAdminEligible };
     }
 
-    // Also verify upstream RBAC eligibility if caller presented an upstream bearer JWT
+    // Verify upstream RBAC eligibility when caller presented an upstream bearer JWT
     if (bearer && !bearer.startsWith('tok_') && !bearer.startsWith('mock_tok_')) {
       const remoteGatewayUrl =
         process.env.SUPREMEAI_BACKEND_URL?.trim() || 'https://supremeai-api-ulw0.onrender.com';
@@ -3390,9 +3553,12 @@ async function startServer() {
           const upEmail = String(raw?.email || '')
             .trim()
             .toLowerCase();
-          if (upEmail === cleanEmail) {
+          if (upEmail && (!requestedEmail || requestedEmail === upEmail)) {
+            const matchedCustomer = customerDirectory.find(
+              (c) => c.email.toLowerCase() === upEmail
+            );
             const upRbac = resolveRbacUserProfile(
-              cleanEmail,
+              upEmail,
               {
                 rbacRole: raw?.rbacRole || raw?.rbac_role || raw?.role,
                 isAdminEligible: Boolean(
@@ -3404,13 +3570,13 @@ async function startServer() {
               Array.isArray(data?.adminEmails) ? data.adminEmails : [],
               raw?.rbacRole || raw?.rbac_role || raw?.role
             );
-            return { cleanEmail, isEligible: upRbac.isAdminEligible };
+            return { cleanEmail: upEmail, isEligible: upRbac.isAdminEligible };
           }
         }
       } catch {}
     }
 
-    return { cleanEmail, isEligible: false };
+    return { cleanEmail: '', isEligible: false };
   };
 
   const getActiveTotpConfig = (
@@ -3858,7 +4024,7 @@ async function startServer() {
       res.cookie('supremeai_admin_session', adminToken, {
         httpOnly: true,
         sameSite: 'lax',
-        secure: req.secure,
+        secure: isHttpsRequest(req),
         path: '/api/admin',
         maxAge: ADMIN_SESSION_TTL_MS,
       });
@@ -4824,7 +4990,7 @@ async function startServer() {
 
       const generatedSecret =
         rawSecret ||
-        `sk-${provider === 'supremeai' ? 'supreme' : provider.slice(0, 4)}-live-${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
+        `sk-${provider === 'supremeai' ? 'supreme' : provider.slice(0, 4)}-live-${crypto.randomBytes(24).toString('base64url')}`;
       const prefix = generatedSecret.slice(0, Math.min(14, generatedSecret.length));
       const masked =
         generatedSecret.length > 10
@@ -5744,7 +5910,12 @@ async function startServer() {
     res.json({ success: true, invoice, balance_usd: wallet.balanceUsd });
   });
 
-  app.get('/metrics/usage', (_req: Request, res: Response) => {
+  app.get('/metrics/usage', async (req: Request, res: Response) => {
+    const auth = await verifyAdminAuthorization(req);
+    if (!auth.ok) {
+      res.status(auth.status || 401).json({ error: auth.error || 'Admin authorization required.' });
+      return;
+    }
     const items = Array.from(dailyUsageMap.values());
     res.json({ items, total: items.length });
   });
@@ -5835,9 +6006,10 @@ async function startServer() {
       res.status(404).json({ error: 'Webhook not found' });
       return;
     }
+    let parsedWebhookUrl: URL;
     try {
-      const parsed = new URL(target.url);
-      const targetCheck = isRestrictedProxyTarget(parsed, false);
+      parsedWebhookUrl = new URL(target.url);
+      const targetCheck = await resolveAndCheckProxyTarget(parsedWebhookUrl, false);
       if (targetCheck.restricted) {
         res.status(400).json({ error: targetCheck.reason || 'Restricted webhook destination.' });
         return;
@@ -5849,12 +6021,16 @@ async function startServer() {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
-      const hookRes = await fetch(target.url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-SupremeAI-Signature': target.secret },
-        body: JSON.stringify({ event: 'webhook.test', timestamp: new Date().toISOString() }),
-        signal: controller.signal,
-      });
+      const hookRes = await safeFetchWithRedirectCheck(
+        parsedWebhookUrl,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-SupremeAI-Signature': target.secret },
+          body: JSON.stringify({ event: 'webhook.test', timestamp: new Date().toISOString() }),
+          signal: controller.signal,
+        },
+        false
+      );
       clearTimeout(timeout);
       target.lastTriggered = `${new Date().toLocaleTimeString()} (HTTP ${hookRes.status})`;
       if (!hookRes.ok) target.failureCount += 1;
@@ -7732,8 +7908,9 @@ async function startServer() {
         });
         return;
       }
-      const resolved = path.resolve(process.cwd(), targetRel);
-      if (resolved !== process.cwd() && !resolved.startsWith(process.cwd() + path.sep)) {
+      const workspaceRealRoot = fs.realpathSync(process.cwd());
+      const resolved = path.resolve(workspaceRealRoot, targetRel);
+      if (resolved !== workspaceRealRoot && !resolved.startsWith(workspaceRealRoot + path.sep)) {
         res.json({ exitCode: 1, stderr: 'Security guard: access outside workspace root denied.' });
         return;
       }
@@ -7741,7 +7918,26 @@ async function startServer() {
         res.json({ exitCode: 1, stderr: `cat: ${targetRel}: No such file` });
         return;
       }
-      const content = fs.readFileSync(resolved, 'utf-8');
+      let realTarget: string;
+      try {
+        realTarget = fs.realpathSync(resolved);
+      } catch {
+        res.json({ exitCode: 1, stderr: `cat: ${targetRel}: Cannot resolve file` });
+        return;
+      }
+      if (realTarget !== workspaceRealRoot && !realTarget.startsWith(workspaceRealRoot + path.sep)) {
+        res.json({ exitCode: 1, stderr: 'Security guard: symlink escape outside workspace denied.' });
+        return;
+      }
+      const resolvedRel = path.relative(workspaceRealRoot, realTarget);
+      if (isProtectedWorkspaceFile(resolvedRel)) {
+        res.json({
+          exitCode: 1,
+          stderr: 'Security guard: access to protected environment or credential files is denied.',
+        });
+        return;
+      }
+      const content = fs.readFileSync(realTarget, 'utf-8');
       res.json({
         exitCode: 0,
         stdout: content.length > 6000 ? content.slice(0, 6000) + '\n... [truncated]' : content,
@@ -7749,25 +7945,8 @@ async function startServer() {
       return;
     }
 
-    // Strict allowlist for safe read-only OS / Dev inspection commands
-    const ALLOWED_PREFIXES = [
-      'ls',
-      'node -v',
-      'node --version',
-      'npm -v',
-      'npm --version',
-      'git status',
-      'git branch',
-      'git log',
-      'git diff --stat',
-      'tsc --version',
-    ];
-
-    const isSafe = ALLOWED_PREFIXES.some(
-      (prefix) => rawCommand === prefix || rawCommand.startsWith(prefix + ' ')
-    );
-
-    if (!isSafe || /[;&|`$<>]/.test(rawCommand)) {
+    // Strict shell-free execFile allowlist for read-only workspace inspection
+    if (/[;&|`$<>\r\n]/.test(rawCommand)) {
       res.json({
         exitCode: 126,
         stderr: `Command "${rawCommand}" is blocked by workspace sandbox policy. Type "help" to view permitted commands.`,
@@ -7775,22 +7954,67 @@ async function startServer() {
       return;
     }
 
+    let execSpec: { bin: string; binArgs: string[] } | null = null;
     if (cmd === 'ls') {
+      const workspaceRealRoot = fs.realpathSync(process.cwd());
+      const safeLsArgs: string[] = [];
       for (const arg of args) {
-        if (arg.startsWith('-')) continue;
-        const resolved = path.resolve(process.cwd(), arg);
-        if (resolved !== process.cwd() && !resolved.startsWith(process.cwd() + path.sep)) {
+        if (/^-[alhF1]+$/.test(arg)) {
+          safeLsArgs.push(arg);
+          continue;
+        }
+        if (arg.startsWith('-')) {
+          res.json({ exitCode: 126, stderr: `Unsupported ls flag "${arg}".` });
+          return;
+        }
+        const resolved = path.resolve(workspaceRealRoot, arg);
+        if (resolved !== workspaceRealRoot && !resolved.startsWith(workspaceRealRoot + path.sep)) {
           res.json({
             exitCode: 1,
             stderr: 'Security guard: access outside workspace root denied.',
           });
           return;
         }
+        if (fs.existsSync(resolved)) {
+          const realDir = fs.realpathSync(resolved);
+          if (realDir !== workspaceRealRoot && !realDir.startsWith(workspaceRealRoot + path.sep)) {
+            res.json({
+              exitCode: 1,
+              stderr: 'Security guard: symlink escape outside workspace denied.',
+            });
+            return;
+          }
+        }
+        safeLsArgs.push(arg);
       }
+      execSpec = { bin: 'ls', binArgs: safeLsArgs };
+    } else if (rawCommand === 'node -v' || rawCommand === 'node --version') {
+      execSpec = { bin: process.execPath, binArgs: ['-v'] };
+    } else if (rawCommand === 'npm -v' || rawCommand === 'npm --version') {
+      execSpec = { bin: 'npm', binArgs: ['-v'] };
+    } else if (rawCommand === 'git status' || rawCommand === 'git status -s') {
+      execSpec = { bin: 'git', binArgs: rawCommand === 'git status -s' ? ['status', '-s'] : ['status'] };
+    } else if (rawCommand === 'git branch') {
+      execSpec = { bin: 'git', binArgs: ['branch'] };
+    } else if (rawCommand === 'git log' || /^git log -n [1-9]\d{0,1}$/.test(rawCommand)) {
+      const n = rawCommand === 'git log' ? '10' : rawCommand.split(' ').pop() || '10';
+      execSpec = { bin: 'git', binArgs: ['log', '--oneline', '-n', n] };
+    } else if (rawCommand === 'git diff --stat') {
+      execSpec = { bin: 'git', binArgs: ['diff', '--stat'] };
+    } else if (rawCommand === 'tsc --version') {
+      execSpec = { bin: 'npx', binArgs: ['tsc', '--version'] };
+    }
+
+    if (!execSpec) {
+      res.json({
+        exitCode: 126,
+        stderr: `Command "${rawCommand}" is blocked by workspace sandbox policy. Type "help" to view permitted commands.`,
+      });
+      return;
     }
 
     try {
-      const { stdout, stderr } = await execAsync(rawCommand, {
+      const { stdout, stderr } = await execFileAsync(execSpec.bin, execSpec.binArgs, {
         cwd: process.cwd(),
         timeout: 5000,
         maxBuffer: 512 * 1024,
@@ -7808,7 +8032,15 @@ async function startServer() {
   // Read-only workspace source file list & reader for Developer Code Tab
   app.get('/api/workspace/files', (_req: Request, res: Response) => {
     const allowedExt = new Set(['.ts', '.tsx', '.js', '.jsx', '.json', '.css', '.html', '.md']);
-    const ignoreDirs = new Set(['node_modules', '.git', 'dist', '.next', 'coverage', '.aistudio']);
+    const ignoreDirs = new Set([
+      'node_modules',
+      '.git',
+      'dist',
+      '.next',
+      'coverage',
+      '.aistudio',
+      '.studio-data',
+    ]);
     const collected: string[] = [];
 
     const walk = (dir: string, depth: number) => {
@@ -7854,8 +8086,9 @@ async function startServer() {
         .json({ error: 'Access to protected environment or credential files is blocked.' });
       return;
     }
-    const resolved = path.resolve(process.cwd(), relPath);
-    if (resolved !== process.cwd() && !resolved.startsWith(process.cwd() + path.sep)) {
+    const workspaceRealRoot = fs.realpathSync(process.cwd());
+    const resolved = path.resolve(workspaceRealRoot, relPath);
+    if (resolved !== workspaceRealRoot && !resolved.startsWith(workspaceRealRoot + path.sep)) {
       res.status(403).json({ error: 'Security guard: path outside workspace root denied.' });
       return;
     }
@@ -7863,8 +8096,25 @@ async function startServer() {
       res.status(404).json({ error: `File not found: ${relPath}` });
       return;
     }
-    const content = fs.readFileSync(resolved, 'utf-8');
-    const ext = path.extname(resolved).replace(/^\./, '').toLowerCase() || 'text';
+    let realTarget: string;
+    try {
+      realTarget = fs.realpathSync(resolved);
+    } catch {
+      res.status(404).json({ error: `File not found: ${relPath}` });
+      return;
+    }
+    if (realTarget !== workspaceRealRoot && !realTarget.startsWith(workspaceRealRoot + path.sep)) {
+      res.status(403).json({ error: 'Security guard: symlink escape outside workspace denied.' });
+      return;
+    }
+    if (isProtectedWorkspaceFile(path.relative(workspaceRealRoot, realTarget))) {
+      res
+        .status(403)
+        .json({ error: 'Access to protected environment or credential files is blocked.' });
+      return;
+    }
+    const content = fs.readFileSync(realTarget, 'utf-8');
+    const ext = path.extname(realTarget).replace(/^\./, '').toLowerCase() || 'text';
     res.json({
       path: relPath,
       lang: ext,
@@ -7874,6 +8124,16 @@ async function startServer() {
   });
 
   app.post('/api/workspace/project-run', async (req: Request, res: Response) => {
+    const callerIdentity = (req as any).authIdentity as
+      | { email: string; isAdmin: boolean; tier: PlanTier }
+      | undefined;
+    if (process.env.ALLOW_UNSANDBOXED_PROJECT_RUN !== 'true' || !callerIdentity?.isAdmin) {
+      res.status(403).json({
+        error:
+          'Host project code execution is disabled in this environment for security isolation. Run code in the client-side browser preview or enable an isolated sandbox runner.',
+      });
+      return;
+    }
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as {
       runtime?: string;
       entryFile?: string;
@@ -8065,7 +8325,7 @@ async function startServer() {
       return;
     }
 
-    const proxyRestriction = isRestrictedProxyTarget(parsed, isLocalRelative);
+    const proxyRestriction = await resolveAndCheckProxyTarget(parsed, isLocalRelative);
     if (proxyRestriction.restricted) {
       res.status(403).json({
         error:
@@ -8129,13 +8389,16 @@ async function startServer() {
       }
 
       const canHaveBody = upstreamMethod !== 'GET' && upstreamMethod !== 'HEAD';
-      let response = await fetch(parsed.toString(), {
-        method: upstreamMethod,
-        redirect: 'follow',
-        signal: controller.signal,
-        headers: upstreamHeaders,
-        body: canHaveBody && forwardBody !== undefined ? forwardBody : undefined,
-      });
+      let response = await safeFetchWithRedirectCheck(
+        parsed,
+        {
+          method: upstreamMethod,
+          signal: controller.signal,
+          headers: upstreamHeaders,
+          body: canHaveBody && forwardBody !== undefined ? forwardBody : undefined,
+        },
+        isLocalRelative
+      );
 
       if (
         upstreamMethod === 'GET' &&
@@ -8152,11 +8415,14 @@ async function startServer() {
           'Sec-Ch-Ua-Mobile': '?1',
           'Sec-Ch-Ua-Platform': '"Android"',
         };
-        const retryRes = await fetch(mobileUrl.toString(), {
-          redirect: 'follow',
-          signal: controller.signal,
-          headers: mobileHeaders,
-        }).catch(() => null);
+        const retryRes = await safeFetchWithRedirectCheck(
+          mobileUrl,
+          {
+            signal: controller.signal,
+            headers: mobileHeaders,
+          },
+          false
+        ).catch(() => null);
         if (retryRes && retryRes.ok) {
           response = retryRes;
         }
@@ -8171,11 +8437,14 @@ async function startServer() {
           'User-Agent': 'SupremeAI-Studio-Browser/1.0 (https://supremeai-studio.pages.dev)',
           'Api-User-Agent': 'SupremeAI-Studio-Browser/1.0 (https://supremeai-studio.pages.dev)',
         };
-        const wikiRetry = await fetch(parsed.toString(), {
-          redirect: 'follow',
-          signal: controller.signal,
-          headers: wikiHeaders,
-        }).catch(() => null);
+        const wikiRetry = await safeFetchWithRedirectCheck(
+          parsed,
+          {
+            signal: controller.signal,
+            headers: wikiHeaders,
+          },
+          false
+        ).catch(() => null);
         if (wikiRetry && wikiRetry.ok) {
           response = wikiRetry;
         }
@@ -8389,6 +8658,10 @@ async function startServer() {
     const id =
       typeof body.id === 'string' && body.id.trim() ? body.id.trim() : `vault_${Date.now()}`;
     const existing = expressVaultStore.get(id);
+    if (existing && existing.ownerEmail && existing.ownerEmail !== owner) {
+      res.status(403).json({ error: 'Cannot overwrite another user vault entry.' });
+      return;
+    }
     const now = new Date().toISOString();
     const record: StoredExpressVaultRecord = {
       id,
@@ -8471,20 +8744,6 @@ async function startServer() {
   };
   const gmailSealingSecret = getGmailSealingSecret();
 
-  const isHttpsRequest = (req: Request): boolean => {
-    const protoHeader = String(req.header('x-forwarded-proto') || '').toLowerCase();
-    const forwardedHeader = String(req.header('forwarded') || '').toLowerCase();
-    const originHeader = String(req.header('origin') || '').toLowerCase();
-    const refererHeader = String(req.header('referer') || '').toLowerCase();
-    return (
-      req.secure ||
-      protoHeader.includes('https') ||
-      forwardedHeader.includes('proto=https') ||
-      originHeader.startsWith('https://') ||
-      refererHeader.startsWith('https://')
-    );
-  };
-
   app.get('/api/workspace/gmail-session', async (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-store');
     const rawCookie = parseCookieFromHeader(req.header('cookie'), GMAIL_SESSION_COOKIE_NAME);
@@ -8563,12 +8822,14 @@ async function startServer() {
     lastRunAt?: string | null;
     lastRunStatus?: 'idle' | 'ok' | 'error';
     lastRunSummary?: string;
+    ownerEmail?: string;
     createdAt: string;
     updatedAt: string;
   }
   const studioDataDir = path.join(process.cwd(), '.studio-data');
   const schedulePersistFile = path.join(studioDataDir, 'browser-schedules.json');
   const expressScheduleStore = new Map<string, StoredScheduleRecord>();
+  const expressScheduleOwner = new Map<string, string>();
   const lastCronRunMinuteById = new Map<string, string>();
 
   const loadPersistedExpressSchedules = () => {
@@ -8579,7 +8840,11 @@ async function startServer() {
         if (Array.isArray(parsed)) {
           for (const item of parsed) {
             if (item?.id) {
-              expressScheduleStore.set(String(item.id), item as StoredScheduleRecord);
+              const rec = item as StoredScheduleRecord;
+              expressScheduleStore.set(String(rec.id), rec);
+              if (rec.ownerEmail) {
+                expressScheduleOwner.set(String(rec.id), String(rec.ownerEmail).toLowerCase());
+              }
             }
           }
         }
@@ -8602,26 +8867,9 @@ async function startServer() {
     }
   };
 
-  const isSafeScheduleTargetUrl = (rawUrl: string): boolean => {
-    try {
-      const parsed = new URL(rawUrl);
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-      const host = parsed.hostname.toLowerCase();
-      if (
-        host === 'localhost' ||
-        host === '127.0.0.1' ||
-        host === '::1' ||
-        host === '169.254.169.254' ||
-        host.startsWith('10.') ||
-        host.startsWith('192.168.') ||
-        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
-      ) {
-        return false;
-      }
-      return true;
-    } catch {
-      return false;
-    }
+  const getScheduleOwner = (record?: StoredScheduleRecord): string => {
+    if (!record) return '';
+    return (record.ownerEmail || expressScheduleOwner.get(record.id) || '').toLowerCase();
   };
 
   const executeServerScheduleRecord = async (
@@ -8631,27 +8879,30 @@ async function startServer() {
     let status: 'ok' | 'error' = 'error';
     let summary = 'Skipped invalid target URL';
 
-    if (isSafeScheduleTargetUrl(record.targetUrl)) {
+    try {
+      const parsedTarget = new URL(record.targetUrl);
       const started = Date.now();
-      try {
-        const resp = await fetch(record.targetUrl, {
+      const resp = await safeFetchWithRedirectCheck(
+        parsedTarget,
+        {
           method: 'GET',
           headers: {
-            'User-Agent': 'SupremeAI-Studio-Scheduler/2.4',
+            'User-Agent': `SupremeAI-Studio-Scheduler/${APP_VERSION}`,
             Accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
           },
           signal: AbortSignal.timeout(8000),
-        });
-        const latencyMs = Date.now() - started;
-        const snippet = await resp.text().catch(() => '');
-        const titleMatch = snippet.match(/<title[^>]*>([^<]{1,120})<\/title>/i);
-        const pageTitle = titleMatch ? titleMatch[1].replace(/\s+/g, ' ').trim() : record.domain;
-        status = resp.ok ? 'ok' : 'error';
-        summary = `HTTP ${resp.status} · ${pageTitle} · ${latencyMs}ms`;
-      } catch (err: unknown) {
-        status = 'error';
-        summary = err instanceof Error ? err.message : 'Request failed';
-      }
+        },
+        false
+      );
+      const latencyMs = Date.now() - started;
+      const snippet = await resp.text().catch(() => '');
+      const titleMatch = snippet.match(/<title[^>]*>([^<]{1,120})<\/title>/i);
+      const pageTitle = titleMatch ? titleMatch[1].replace(/\s+/g, ' ').trim() : record.domain;
+      status = resp.ok ? 'ok' : 'error';
+      summary = `HTTP ${resp.status} · ${pageTitle} · ${latencyMs}ms`;
+    } catch (err: unknown) {
+      status = 'error';
+      summary = err instanceof Error ? err.message : 'Request failed';
     }
 
     const updated: StoredScheduleRecord = {
@@ -8682,8 +8933,6 @@ async function startServer() {
   }, 30000);
   serverCronTimer.unref?.();
 
-  const expressScheduleOwner = new Map<string, string>();
-
   app.get('/api/workspace/browser-schedules', async (req: Request, res: Response) => {
     const owner = await resolveAuthenticatedEmail(req);
     if (!owner) {
@@ -8694,7 +8943,7 @@ async function startServer() {
       .trim()
       .toLowerCase();
     const schedules = Array.from(expressScheduleStore.values())
-      .filter((s) => (expressScheduleOwner.get(s.id) || '') === owner)
+      .filter((s) => getScheduleOwner(s) === owner)
       .filter((s) => !domainFilter || s.domain === domainFilter);
     res.json({ schedules });
   });
@@ -8707,7 +8956,7 @@ async function startServer() {
     }
     const id = String(req.query.id || req.body?.id || '').trim();
     const existing = expressScheduleStore.get(id);
-    if (!existing || (expressScheduleOwner.get(id) || '') !== owner) {
+    if (!existing || getScheduleOwner(existing) !== owner) {
       res.status(404).json({ error: 'Schedule not found.' });
       return;
     }
@@ -8724,7 +8973,7 @@ async function startServer() {
     const body = (req.body || {}) as Partial<StoredScheduleRecord> & { action?: string };
     if (body.action === 'run' && body.id) {
       const existing = expressScheduleStore.get(String(body.id));
-      if (!existing || (expressScheduleOwner.get(String(body.id)) || '') !== owner) {
+      if (!existing || getScheduleOwner(existing) !== owner) {
         res.status(404).json({ error: 'Schedule not found.' });
         return;
       }
@@ -8739,12 +8988,27 @@ async function startServer() {
     const id =
       typeof body.id === 'string' && body.id.trim() ? body.id.trim() : `sched_${Date.now()}`;
     const existing = expressScheduleStore.get(id);
+    if (existing && getScheduleOwner(existing) && getScheduleOwner(existing) !== owner) {
+      res.status(403).json({ error: 'Cannot overwrite another user schedule.' });
+      return;
+    }
+    const rawTargetUrl = (body.targetUrl || `https://${body.domain.trim()}`).trim();
+    try {
+      const targetCheck = isRestrictedProxyTarget(new URL(rawTargetUrl), false);
+      if (targetCheck.restricted) {
+        res.status(400).json({ error: targetCheck.reason || 'Restricted schedule target URL.' });
+        return;
+      }
+    } catch {
+      res.status(400).json({ error: 'Invalid schedule target URL.' });
+      return;
+    }
     const now = new Date().toISOString();
     const record: StoredScheduleRecord = {
       id,
       title: (body.title || `${body.domain} task`).trim().slice(0, 80),
       domain: body.domain.trim().toLowerCase(),
-      targetUrl: (body.targetUrl || `https://${body.domain.trim()}`).trim(),
+      targetUrl: rawTargetUrl,
       vaultEntryId: String(body.vaultEntryId),
       vaultMode: body.vaultMode === 'credentials' ? 'credentials' : 'session',
       cadence:
@@ -8757,6 +9021,7 @@ async function startServer() {
       lastRunAt: body.lastRunAt ?? existing?.lastRunAt ?? null,
       lastRunStatus: body.lastRunStatus ?? existing?.lastRunStatus ?? 'idle',
       lastRunSummary: body.lastRunSummary ?? existing?.lastRunSummary,
+      ownerEmail: owner,
       createdAt:
         typeof body.createdAt === 'string' && body.createdAt.trim()
           ? body.createdAt
@@ -8779,7 +9044,7 @@ async function startServer() {
       }
       const id = String(req.params.id || req.query.id || req.body?.id || '').trim();
       const existing = expressScheduleStore.get(id);
-      if (!existing || (expressScheduleOwner.get(id) || '') !== owner) {
+      if (!existing || getScheduleOwner(existing) !== owner) {
         res.status(404).json({ error: 'Schedule not found.' });
         return;
       }
@@ -8813,7 +9078,8 @@ async function startServer() {
         res.status(400).json({ error: 'id parameter is required.' });
         return;
       }
-      if ((expressScheduleOwner.get(id) || '') !== owner) {
+      const existing = expressScheduleStore.get(id);
+      if (!existing || getScheduleOwner(existing) !== owner) {
         res.status(404).json({ error: 'Schedule not found.' });
         return;
       }
@@ -8893,10 +9159,18 @@ async function startServer() {
       return;
     }
 
+    const hostValidation = validateGitLabHost(
+      String(req.query.host || ''),
+      process.env.GITLAB_HOST
+    );
+    if (!hostValidation.ok || !('host' in hostValidation)) {
+      res.status(400).json({
+        error: 'error' in hostValidation ? hostValidation.error : 'Invalid GitLab host.',
+      });
+      return;
+    }
+    const gitlabHost = hostValidation.host;
     const clientId = (process.env.GITLAB_CLIENT_ID || '').trim();
-    const gitlabHost = String(req.query.host || process.env.GITLAB_HOST || 'https://gitlab.com')
-      .trim()
-      .replace(/\/+$/, '');
     if (!clientId || !(process.env.GITLAB_CLIENT_SECRET || '').trim()) {
       res.status(501).json({
         configured: false,
@@ -8932,8 +9206,16 @@ async function startServer() {
             : null;
       const code = String(req.query.code || '').trim();
       const state = String(req.query.state || '').trim();
+      const baseUrl = resolveAppBaseUrl(req);
+      let targetOrigin = '';
+      try {
+        targetOrigin = new URL(baseUrl).origin;
+      } catch {
+        targetOrigin = `http://127.0.0.1:${PORT}`;
+      }
       const renderPopupResult = (payload: Record<string, unknown>, isError = false) => {
         const serialized = JSON.stringify(payload).replace(/</g, '\\u003c');
+        const serializedOrigin = JSON.stringify(targetOrigin).replace(/</g, '\\u003c');
         res
           .status(isError ? 400 : 200)
           .send(
@@ -8941,7 +9223,7 @@ async function startServer() {
               isError
                 ? 'OAuth authorization failed. You can close this window.'
                 : 'Authorization complete. Returning to Studio...'
-            }</p><script>try{if(window.opener){window.opener.postMessage(${serialized},'*');}}catch(_){}setTimeout(function(){window.close();},120);</script></body></html>`
+            }</p><script>try{if(window.opener){window.opener.postMessage(${serialized},${serializedOrigin});}}catch(_){}setTimeout(function(){window.close();},120);</script></body></html>`
           );
       };
 
@@ -8962,7 +9244,6 @@ async function startServer() {
         return;
       }
 
-      const baseUrl = resolveAppBaseUrl(req);
       const callbackUrl = `${baseUrl}/api/git/oauth/${provider}/callback`;
 
       try {
@@ -8999,10 +9280,18 @@ async function startServer() {
           return;
         }
 
-        const host = (savedState.host || process.env.GITLAB_HOST || 'https://gitlab.com').replace(
-          /\/+$/,
-          ''
-        );
+        const hostValidation = validateGitLabHost(savedState.host || '', process.env.GITLAB_HOST);
+        if (!hostValidation.ok || !('host' in hostValidation)) {
+          renderPopupResult(
+            {
+              type: 'SUPREMEAI_GIT_OAUTH_ERROR',
+              error: 'error' in hostValidation ? hostValidation.error : 'Invalid GitLab host.',
+            },
+            true
+          );
+          return;
+        }
+        const host = hostValidation.host;
         const tokenRes = await fetch(`${host}/oauth/token`, {
           method: 'POST',
           headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
@@ -10017,6 +10306,385 @@ Rules:
   // forward them upstream with auth headers preserved and SSE left unbuffered.
   // The live-data fabric in `src/services/federationSyncService.ts` depends on
   // this contract: JSON or an explicit 5xx, never a 200 text/html response.
+  // --- Persistent Local Conversations API (Mounted BEFORE federation proxy) ---
+  const conversationPersistFile = path.join(studioDataDir, 'conversations.json');
+  interface StoredConversation {
+    id: string;
+    title: string;
+    created_at: string;
+    updated_at: string;
+    model?: string;
+    ownerEmail?: string;
+    messages: Array<{
+      id: string;
+      role: 'user' | 'assistant';
+      content: string;
+      created_at: string;
+    }>;
+  }
+  const expressConversationStore = new Map<string, StoredConversation>();
+
+  const loadExpressConversations = () => {
+    try {
+      if (fs.existsSync(conversationPersistFile)) {
+        const raw = fs.readFileSync(conversationPersistFile, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (item?.id) {
+              expressConversationStore.set(String(item.id), item as StoredConversation);
+            }
+          }
+        }
+      }
+    } catch {}
+  };
+
+  const persistExpressConversations = () => {
+    try {
+      fs.mkdirSync(studioDataDir, { recursive: true });
+      fs.writeFileSync(
+        conversationPersistFile,
+        JSON.stringify(Array.from(expressConversationStore.values()), null, 2),
+        'utf-8'
+      );
+    } catch {}
+  };
+
+  loadExpressConversations();
+
+  const CONV_SB_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '')
+    .trim()
+    .replace(/\/$/, '');
+  const CONV_SB_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const convSupabaseConfigured = () => Boolean(CONV_SB_URL && CONV_SB_KEY);
+  const convSb = (value: string) => encodeURIComponent(value);
+  const convSupabaseRest = async (
+    pathAndQuery: string,
+    method: string,
+    body?: unknown,
+    prefer = 'return=representation'
+  ): Promise<any> => {
+    const res = await fetch(`${CONV_SB_URL}/rest/v1/${pathAndQuery}`, {
+      method,
+      headers: {
+        apikey: CONV_SB_KEY,
+        Authorization: `Bearer ${CONV_SB_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: prefer,
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(6500),
+    });
+    if (!res.ok)
+      throw new Error(`Supabase ${method} ${pathAndQuery.split('?')[0]} -> HTTP ${res.status}`);
+    if (res.status === 204) return null;
+    const text = await res.text();
+    return text ? JSON.parse(text) : null;
+  };
+
+  app.get('/api/v1/conversations', async (req: Request, res: Response) => {
+    const owner = await resolveAuthenticatedEmail(req);
+    if (!owner) {
+      res.status(401).json({ error: 'Authentication is required.' });
+      return;
+    }
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 50));
+    if (convSupabaseConfigured()) {
+      try {
+        const rows = await convSupabaseRest(
+          `conversations?owner_email=eq.${convSb(owner)}&select=id,title,created_at,updated_at&order=updated_at.desc&limit=${limit}`,
+          'GET',
+          undefined,
+          'return=minimal'
+        );
+        const convs: any[] = Array.isArray(rows) ? rows : [];
+        const counts: Record<string, number> = {};
+        const ids = convs.map((c) => c.id).filter(Boolean);
+        if (ids.length > 0) {
+          const msgs = await convSupabaseRest(
+            `conversation_messages?conversation_id=in.(${ids.map((i) => convSb(String(i))).join(',')})&select=conversation_id`,
+            'GET',
+            undefined,
+            'return=minimal'
+          );
+          for (const m of Array.isArray(msgs) ? msgs : []) {
+            counts[m.conversation_id] = (counts[m.conversation_id] || 0) + 1;
+          }
+        }
+        res.json({
+          conversations: convs.map((c) => ({
+            id: c.id,
+            title: c.title,
+            created_at: c.created_at,
+            updated_at: c.updated_at,
+            message_count: counts[c.id] || 0,
+          })),
+        });
+        return;
+      } catch {
+        /* fall through to local store */
+      }
+    }
+    const list = Array.from(expressConversationStore.values())
+      .filter((c) => (c.ownerEmail || '') === owner)
+      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+      .slice(0, limit)
+      .map((c) => ({
+        id: c.id,
+        title: c.title,
+        created_at: c.created_at,
+        updated_at: c.updated_at,
+        message_count: c.messages?.length || 0,
+      }));
+    res.json({ conversations: list });
+  });
+
+  app.post('/api/v1/conversations', async (req: Request, res: Response) => {
+    const owner = await resolveAuthenticatedEmail(req);
+    if (!owner) {
+      res.status(401).json({ error: 'Authentication is required.' });
+      return;
+    }
+    const body = req.body || {};
+    const id = String(
+      body.conversationId ||
+        body.id ||
+        `conv_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`
+    );
+    const existingConv = expressConversationStore.get(id);
+    if (existingConv && existingConv.ownerEmail && existingConv.ownerEmail !== owner) {
+      res.status(403).json({ error: 'Cannot overwrite another user conversation.' });
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    if (convSupabaseConfigured()) {
+      try {
+        const titleVal =
+          typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'New Chat';
+        const modelVal = typeof body.model === 'string' ? body.model : 'supreme-spark';
+        await convSupabaseRest('conversations', 'POST', [
+          {
+            id,
+            owner_email: owner,
+            title: titleVal,
+            model: modelVal,
+            created_at: nowIso,
+            updated_at: nowIso,
+          },
+        ]);
+        res.status(201).json({
+          id,
+          title: titleVal,
+          created_at: nowIso,
+          updated_at: nowIso,
+          model: modelVal,
+          messages: [],
+        });
+        return;
+      } catch {
+        /* fall through to local store */
+      }
+    }
+    const conv: StoredConversation = {
+      id,
+      title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'New Chat',
+      created_at: nowIso,
+      updated_at: nowIso,
+      model: typeof body.model === 'string' ? body.model : 'supreme-spark',
+      messages: [],
+      ownerEmail: owner,
+    };
+    expressConversationStore.set(id, conv);
+    persistExpressConversations();
+    res.status(201).json(conv);
+  });
+
+  app.get('/api/v1/conversations/:id/messages', async (req: Request, res: Response) => {
+    const owner = await resolveAuthenticatedEmail(req);
+    if (!owner) {
+      res.status(401).json({ error: 'Authentication is required.' });
+      return;
+    }
+    if (convSupabaseConfigured()) {
+      try {
+        const convRows = await convSupabaseRest(
+          `conversations?id=eq.${convSb(req.params.id)}&select=owner_email`,
+          'GET',
+          undefined,
+          'return=minimal'
+        );
+        const convRow = Array.isArray(convRows) ? convRows[0] : null;
+        if (!convRow || convRow.owner_email !== owner) {
+          res.json({ messages: [] });
+          return;
+        }
+        const msgs = await convSupabaseRest(
+          `conversation_messages?conversation_id=eq.${convSb(req.params.id)}&select=id,role,content,created_at&order=created_at.asc`,
+          'GET',
+          undefined,
+          'return=minimal'
+        );
+        res.json({ messages: Array.isArray(msgs) ? msgs : [] });
+        return;
+      } catch {
+        /* fall through to local store */
+      }
+    }
+    const conv = expressConversationStore.get(req.params.id);
+    if (!conv || (conv.ownerEmail || '') !== owner) {
+      res.json({ messages: [] });
+      return;
+    }
+    res.json({ messages: conv.messages || [] });
+  });
+
+  app.post('/api/v1/conversations/:id/messages', async (req: Request, res: Response) => {
+    const owner = await resolveAuthenticatedEmail(req);
+    if (!owner) {
+      res.status(401).json({ error: 'Authentication is required.' });
+      return;
+    }
+    if (convSupabaseConfigured()) {
+      try {
+        const convRows = await convSupabaseRest(
+          `conversations?id=eq.${convSb(req.params.id)}&select=owner_email`,
+          'GET',
+          undefined,
+          'return=minimal'
+        );
+        const convRow = Array.isArray(convRows) ? convRows[0] : null;
+        if (!convRow || convRow.owner_email !== owner) {
+          res.status(404).json({ error: 'Conversation not found' });
+          return;
+        }
+        const nowIso = new Date().toISOString();
+        const newMsg = {
+          id: String(req.body?.id || `msg_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`),
+          conversation_id: req.params.id,
+          role: req.body?.role === 'assistant' ? 'assistant' : 'user',
+          content: String(req.body?.content || ''),
+          created_at: nowIso,
+        };
+        await convSupabaseRest('conversation_messages', 'POST', [newMsg]);
+        await convSupabaseRest(`conversations?id=eq.${convSb(req.params.id)}`, 'PATCH', {
+          updated_at: nowIso,
+        });
+        res.status(201).json({
+          id: newMsg.id,
+          role: newMsg.role,
+          content: newMsg.content,
+          created_at: newMsg.created_at,
+        });
+        return;
+      } catch {
+        /* fall through to local store */
+      }
+    }
+    const conv = expressConversationStore.get(req.params.id);
+    if (!conv || (conv.ownerEmail || '') !== owner) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+    const body = req.body || {};
+    const newMsg = {
+      id: String(body.id || `msg_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`),
+      role: body.role === 'assistant' ? ('assistant' as const) : ('user' as const),
+      content: String(body.content || ''),
+      created_at: new Date().toISOString(),
+    };
+    conv.messages.push(newMsg);
+    conv.updated_at = new Date().toISOString();
+    persistExpressConversations();
+    res.status(201).json(newMsg);
+  });
+
+  app.patch('/api/v1/conversations/:id', async (req: Request, res: Response) => {
+    const owner = await resolveAuthenticatedEmail(req);
+    if (!owner) {
+      res.status(401).json({ error: 'Authentication is required.' });
+      return;
+    }
+    if (convSupabaseConfigured()) {
+      try {
+        const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+        if (typeof req.body?.title === 'string') patch.title = req.body.title.trim();
+        const rows = await convSupabaseRest(
+          `conversations?id=eq.${convSb(req.params.id)}&owner_email=eq.${convSb(owner)}`,
+          'PATCH',
+          patch
+        );
+        const updated = Array.isArray(rows) ? rows[0] : null;
+        if (!updated) {
+          res.status(404).json({ error: 'Conversation not found' });
+          return;
+        }
+        res.json(updated);
+        return;
+      } catch {
+        /* fall through to local store */
+      }
+    }
+    const conv = expressConversationStore.get(req.params.id);
+    if (!conv || (conv.ownerEmail || '') !== owner) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+    if (typeof req.body?.title === 'string') {
+      conv.title = req.body.title.trim();
+    }
+    conv.updated_at = new Date().toISOString();
+    persistExpressConversations();
+    res.json(conv);
+  });
+
+  app.delete('/api/v1/conversations/:id', async (req: Request, res: Response) => {
+    const owner = await resolveAuthenticatedEmail(req);
+    if (!owner) {
+      res.status(401).json({ error: 'Authentication is required.' });
+      return;
+    }
+    if (convSupabaseConfigured()) {
+      try {
+        const convRows = await convSupabaseRest(
+          `conversations?id=eq.${convSb(req.params.id)}&select=owner_email`,
+          'GET',
+          undefined,
+          'return=minimal'
+        );
+        const convRow = Array.isArray(convRows) ? convRows[0] : null;
+        if (!convRow || convRow.owner_email !== owner) {
+          res.json({ success: true, deleted: false });
+          return;
+        }
+        await convSupabaseRest(
+          `conversation_messages?conversation_id=eq.${convSb(req.params.id)}`,
+          'DELETE',
+          undefined,
+          'return=minimal'
+        );
+        await convSupabaseRest(
+          `conversations?id=eq.${convSb(req.params.id)}&owner_email=eq.${convSb(owner)}`,
+          'DELETE',
+          undefined,
+          'return=minimal'
+        );
+        res.json({ success: true, deleted: true });
+        return;
+      } catch {
+        /* fall through to local store */
+      }
+    }
+    const conv = expressConversationStore.get(req.params.id);
+    if (!conv || (conv.ownerEmail || '') !== owner) {
+      res.json({ success: true, deleted: false });
+      return;
+    }
+    expressConversationStore.delete(req.params.id);
+    persistExpressConversations();
+    res.json({ success: true, deleted: true });
+  });
+
   // ---------------------------------------------------------------------------
   const FEDERATION_PROXY_HOP_HEADERS = new Set([
     'host',
@@ -10132,7 +10800,12 @@ Rules:
   let viteServerPromise: Promise<Awaited<ReturnType<typeof createViteServer>>> | null = null;
   if (isProduction) {
     app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (_req: Request, res: Response) => {
+    // Express 5-compatible SPA fallback (avoids path-to-regexp v8 wildcard TypeError)
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      if ((req.method !== 'GET' && req.method !== 'HEAD') || req.path.startsWith('/api')) {
+        next();
+        return;
+      }
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   } else {
@@ -10175,16 +10848,76 @@ Rules:
     });
   }
 
+  // Centralized 4-arg Express error handler (prevents stack trace leakage in production)
+  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    const status =
+      typeof err?.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
+    if (res.headersSent) return;
+    res.status(status).json({
+      error:
+        status < 500
+          ? String(err?.message || 'Bad request')
+          : isProduction
+            ? 'Internal server error.'
+            : String(err?.message || 'Internal server error.'),
+    });
+  });
+
   // Create HTTP server & mount /api/live WebSocket bridge for Gemini Live API (gemini-3.8-live)
   const server = http.createServer(app);
   const liveWss = new WebSocketServer({ noServer: true });
   const broadcasterWss = new WebSocketServer({ noServer: true });
   const VALID_LIVE_VOICES = new Set(['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr']);
 
-  server.on('upgrade', (request, socket, head) => {
+  const MAX_CONCURRENT_LIVE_WS = 50;
+  const MAX_LIVE_WS_PER_IP = 6;
+  const activeLiveSocketsByIp = new Map<string, number>();
+  const liveWsRateBuckets = new Map<string, number[]>();
+  const broadcasterClientMeta = new WeakMap<WebSocket, { email: string; isAdmin: boolean }>();
+
+  const extractWsToken = (request: http.IncomingMessage, reqUrl: URL): string => {
+    const queryToken = String(reqUrl.searchParams.get('token') || '').trim();
+    if (queryToken) return queryToken;
+    const authHeader = String(request.headers.authorization || '').trim();
+    if (authHeader.startsWith('Bearer ')) return authHeader.slice(7).trim();
+    const cookies = parseCookieHeader(request.headers.cookie);
+    return (cookies['supremeai_admin_session'] || '').trim();
+  };
+
+  server.on('upgrade', async (request, socket, head) => {
     try {
       const reqUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+      const wsToken = extractWsToken(request, reqUrl);
+
       if (reqUrl.pathname === '/api/live') {
+        const clientIp = String(request.socket.remoteAddress || '127.0.0.1');
+        const now = Date.now();
+        const hits = (liveWsRateBuckets.get(clientIp) || []).filter((t) => now - t < 60_000);
+        if (hits.length >= 20) {
+          socket.write('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+        hits.push(now);
+        liveWsRateBuckets.set(clientIp, hits);
+
+        const activeForIp = activeLiveSocketsByIp.get(clientIp) || 0;
+        if (liveWss.clients.size >= MAX_CONCURRENT_LIVE_WS || activeForIp >= MAX_LIVE_WS_PER_IP) {
+          socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+
+        if (isProduction) {
+          const isGuest = wsToken.startsWith('tok_guest_') || wsToken.startsWith('sk-supreme-guest');
+          const identity = wsToken && !isGuest ? await verifyBearerIdentity(wsToken) : null;
+          if (!identity && !isGuest) {
+            socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+            socket.destroy();
+            return;
+          }
+        }
+
         liveWss.handleUpgrade(request, socket, head, (ws) => {
           liveWss.emit('connection', ws, request);
         });
@@ -10193,7 +10926,14 @@ Rules:
         reqUrl.pathname === '/ws/live' ||
         reqUrl.pathname === '/api/ws'
       ) {
+        const identity = wsToken ? await verifyBearerIdentity(wsToken) : null;
+        if (!identity) {
+          socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+          socket.destroy();
+          return;
+        }
         broadcasterWss.handleUpgrade(request, socket, head, (ws) => {
+          broadcasterClientMeta.set(ws, { email: identity.email, isAdmin: identity.isAdmin });
           broadcasterWss.emit('connection', ws, request);
         });
       } else {
@@ -10212,7 +10952,7 @@ Rules:
       JSON.stringify({
         type: 'connection_ack',
         status: 'connected',
-        mode: 'frontend_dev_broadcaster',
+        mode: 'authenticated_broadcaster',
       })
     );
 
@@ -10222,9 +10962,16 @@ Rules:
         if (msg.type === 'ping' || msg.command === 'ping') {
           clientWs.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
         } else if (msg.type === 'customer_updated' || msg.type === 'mcp_service_updated') {
+          const senderMeta = broadcasterClientMeta.get(clientWs);
+          if (!senderMeta?.isAdmin) return;
           const payload = JSON.stringify(msg);
           broadcasterClients.forEach((otherWs) => {
-            if (otherWs !== clientWs && otherWs.readyState === WebSocket.OPEN) {
+            const receiverMeta = broadcasterClientMeta.get(otherWs);
+            if (
+              otherWs !== clientWs &&
+              receiverMeta?.isAdmin &&
+              otherWs.readyState === WebSocket.OPEN
+            ) {
               otherWs.send(payload);
             }
           });
@@ -10242,13 +10989,16 @@ Rules:
   });
 
   liveWss.on('connection', (clientWs: WebSocket, req: http.IncomingMessage) => {
-    const forwardedHeader = req.headers['x-forwarded-for'];
-    const clientIp =
-      typeof forwardedHeader === 'string' && forwardedHeader.trim()
-        ? forwardedHeader.split(',')[0].trim()
-        : req.socket.remoteAddress || '127.0.0.1';
+    const clientIp = String(req.socket.remoteAddress || '127.0.0.1').trim();
+    activeLiveSocketsByIp.set(clientIp, (activeLiveSocketsByIp.get(clientIp) || 0) + 1);
+    const decrementIpCounter = () => {
+      const nextCount = (activeLiveSocketsByIp.get(clientIp) || 1) - 1;
+      if (nextCount <= 0) activeLiveSocketsByIp.delete(clientIp);
+      else activeLiveSocketsByIp.set(clientIp, nextCount);
+    };
 
     if (blockedIps.some((entry) => entry.ip === clientIp)) {
+      decrementIpCounter();
       clientWs.send(
         JSON.stringify({ type: 'error', message: 'Access blocked by platform WAF firewall.' })
       );
@@ -10257,6 +11007,7 @@ Rules:
     }
 
     if (platformConfig.maintenanceMode) {
+      decrementIpCounter();
       clientWs.send(
         JSON.stringify({
           type: 'error',
@@ -10270,6 +11021,7 @@ Rules:
 
     const activeApiKey = process.env.GEMINI_API_KEY?.trim() || '';
     if (!activeApiKey || activeApiKey === 'MY_GEMINI_API_KEY') {
+      decrementIpCounter();
       clientWs.send(
         JSON.stringify({
           type: 'error',
@@ -10481,7 +11233,10 @@ Rules:
     });
 
     clientWs.on('close', () => {
-      isClientClosed = true;
+      if (!isClientClosed) {
+        isClientClosed = true;
+        decrementIpCounter();
+      }
       sessionPromise
         ?.then((session) => {
           try {
@@ -10492,382 +11247,6 @@ Rules:
         })
         .catch(() => {});
     });
-  });
-
-  // --- Persistent Local Conversations API (Parity with Cloudflare Functions) ---
-  const conversationPersistFile = path.join(studioDataDir, 'conversations.json');
-  interface StoredConversation {
-    id: string;
-    title: string;
-    created_at: string;
-    updated_at: string;
-    model?: string;
-    ownerEmail?: string;
-    messages: Array<{
-      id: string;
-      role: 'user' | 'assistant';
-      content: string;
-      created_at: string;
-    }>;
-  }
-  const expressConversationStore = new Map<string, StoredConversation>();
-
-  const loadExpressConversations = () => {
-    try {
-      if (fs.existsSync(conversationPersistFile)) {
-        const raw = fs.readFileSync(conversationPersistFile, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          for (const item of parsed) {
-            if (item?.id) {
-              expressConversationStore.set(String(item.id), item as StoredConversation);
-            }
-          }
-        }
-      }
-    } catch {}
-  };
-
-  const persistExpressConversations = () => {
-    try {
-      fs.mkdirSync(studioDataDir, { recursive: true });
-      fs.writeFileSync(
-        conversationPersistFile,
-        JSON.stringify(Array.from(expressConversationStore.values()), null, 2),
-        'utf-8'
-      );
-    } catch {}
-  };
-
-  loadExpressConversations();
-
-  // Supabase (PostgREST) persistence for conversations when configured; the local
-  // file-backed Map above is the offline/zero-config fallback.
-  const CONV_SB_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '')
-    .trim()
-    .replace(/\/$/, '');
-  const CONV_SB_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-  const convSupabaseConfigured = () => Boolean(CONV_SB_URL && CONV_SB_KEY);
-  const convSb = (value: string) => encodeURIComponent(value);
-  const convSupabaseRest = async (
-    pathAndQuery: string,
-    method: string,
-    body?: unknown,
-    prefer = 'return=representation'
-  ): Promise<any> => {
-    const res = await fetch(`${CONV_SB_URL}/rest/v1/${pathAndQuery}`, {
-      method,
-      headers: {
-        apikey: CONV_SB_KEY,
-        Authorization: `Bearer ${CONV_SB_KEY}`,
-        'Content-Type': 'application/json',
-        Prefer: prefer,
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(6500),
-    });
-    if (!res.ok)
-      throw new Error(`Supabase ${method} ${pathAndQuery.split('?')[0]} -> HTTP ${res.status}`);
-    if (res.status === 204) return null;
-    const text = await res.text();
-    return text ? JSON.parse(text) : null;
-  };
-
-  app.get('/api/v1/conversations', async (req: Request, res: Response) => {
-    const owner = await resolveAuthenticatedEmail(req);
-    if (!owner) {
-      res.status(401).json({ error: 'Authentication is required.' });
-      return;
-    }
-    const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 50));
-    if (convSupabaseConfigured()) {
-      try {
-        const rows = await convSupabaseRest(
-          `conversations?owner_email=eq.${convSb(owner)}&select=id,title,created_at,updated_at&order=updated_at.desc&limit=${limit}`,
-          'GET',
-          undefined,
-          'return=minimal'
-        );
-        const convs: any[] = Array.isArray(rows) ? rows : [];
-        const counts: Record<string, number> = {};
-        const ids = convs.map((c) => c.id).filter(Boolean);
-        if (ids.length > 0) {
-          const msgs = await convSupabaseRest(
-            `conversation_messages?conversation_id=in.(${ids.map((i) => convSb(String(i))).join(',')})&select=conversation_id`,
-            'GET',
-            undefined,
-            'return=minimal'
-          );
-          for (const m of Array.isArray(msgs) ? msgs : []) {
-            counts[m.conversation_id] = (counts[m.conversation_id] || 0) + 1;
-          }
-        }
-        res.json({
-          conversations: convs.map((c) => ({
-            id: c.id,
-            title: c.title,
-            created_at: c.created_at,
-            updated_at: c.updated_at,
-            message_count: counts[c.id] || 0,
-          })),
-        });
-        return;
-      } catch {
-        /* fall through to local store */
-      }
-    }
-    const list = Array.from(expressConversationStore.values())
-      .filter((c) => (c.ownerEmail || '') === owner)
-      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-      .slice(0, limit)
-      .map((c) => ({
-        id: c.id,
-        title: c.title,
-        created_at: c.created_at,
-        updated_at: c.updated_at,
-        message_count: c.messages?.length || 0,
-      }));
-    res.json({ conversations: list });
-  });
-
-  app.post('/api/v1/conversations', async (req: Request, res: Response) => {
-    const owner = await resolveAuthenticatedEmail(req);
-    if (!owner) {
-      res.status(401).json({ error: 'Authentication is required.' });
-      return;
-    }
-    const body = req.body || {};
-    const id = String(
-      body.conversationId ||
-        body.id ||
-        `conv_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
-    );
-    const nowIso = new Date().toISOString();
-    if (convSupabaseConfigured()) {
-      try {
-        const titleVal =
-          typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'New Chat';
-        const modelVal = typeof body.model === 'string' ? body.model : 'supreme-spark';
-        await convSupabaseRest('conversations', 'POST', [
-          {
-            id,
-            owner_email: owner,
-            title: titleVal,
-            model: modelVal,
-            created_at: nowIso,
-            updated_at: nowIso,
-          },
-        ]);
-        res.status(201).json({
-          id,
-          title: titleVal,
-          created_at: nowIso,
-          updated_at: nowIso,
-          model: modelVal,
-          messages: [],
-        });
-        return;
-      } catch {
-        /* fall through to local store */
-      }
-    }
-    const conv: StoredConversation = {
-      id,
-      title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'New Chat',
-      created_at: nowIso,
-      updated_at: nowIso,
-      model: typeof body.model === 'string' ? body.model : 'supreme-spark',
-      messages: [],
-      ownerEmail: owner,
-    };
-    expressConversationStore.set(id, conv);
-    persistExpressConversations();
-    res.status(201).json(conv);
-  });
-
-  app.get('/api/v1/conversations/:id/messages', async (req: Request, res: Response) => {
-    const owner = await resolveAuthenticatedEmail(req);
-    if (!owner) {
-      res.status(401).json({ error: 'Authentication is required.' });
-      return;
-    }
-    if (convSupabaseConfigured()) {
-      try {
-        const convRows = await convSupabaseRest(
-          `conversations?id=eq.${convSb(req.params.id)}&select=owner_email`,
-          'GET',
-          undefined,
-          'return=minimal'
-        );
-        const convRow = Array.isArray(convRows) ? convRows[0] : null;
-        if (!convRow || convRow.owner_email !== owner) {
-          res.json({ messages: [] });
-          return;
-        }
-        const msgs = await convSupabaseRest(
-          `conversation_messages?conversation_id=eq.${convSb(req.params.id)}&select=id,role,content,created_at&order=created_at.asc`,
-          'GET',
-          undefined,
-          'return=minimal'
-        );
-        res.json({ messages: Array.isArray(msgs) ? msgs : [] });
-        return;
-      } catch {
-        /* fall through to local store */
-      }
-    }
-    const conv = expressConversationStore.get(req.params.id);
-    if (!conv || (conv.ownerEmail || '') !== owner) {
-      res.json({ messages: [] });
-      return;
-    }
-    res.json({ messages: conv.messages || [] });
-  });
-
-  app.post('/api/v1/conversations/:id/messages', async (req: Request, res: Response) => {
-    const owner = await resolveAuthenticatedEmail(req);
-    if (!owner) {
-      res.status(401).json({ error: 'Authentication is required.' });
-      return;
-    }
-    if (convSupabaseConfigured()) {
-      try {
-        const convRows = await convSupabaseRest(
-          `conversations?id=eq.${convSb(req.params.id)}&select=owner_email`,
-          'GET',
-          undefined,
-          'return=minimal'
-        );
-        const convRow = Array.isArray(convRows) ? convRows[0] : null;
-        if (!convRow || convRow.owner_email !== owner) {
-          res.status(404).json({ error: 'Conversation not found' });
-          return;
-        }
-        const nowIso = new Date().toISOString();
-        const newMsg = {
-          id: String(req.body?.id || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`),
-          conversation_id: req.params.id,
-          role: req.body?.role === 'assistant' ? 'assistant' : 'user',
-          content: String(req.body?.content || ''),
-          created_at: nowIso,
-        };
-        await convSupabaseRest('conversation_messages', 'POST', [newMsg]);
-        await convSupabaseRest(`conversations?id=eq.${convSb(req.params.id)}`, 'PATCH', {
-          updated_at: nowIso,
-        });
-        res.status(201).json({
-          id: newMsg.id,
-          role: newMsg.role,
-          content: newMsg.content,
-          created_at: newMsg.created_at,
-        });
-        return;
-      } catch {
-        /* fall through to local store */
-      }
-    }
-    const conv = expressConversationStore.get(req.params.id);
-    if (!conv || (conv.ownerEmail || '') !== owner) {
-      res.status(404).json({ error: 'Conversation not found' });
-      return;
-    }
-    const body = req.body || {};
-    const newMsg = {
-      id: String(body.id || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`),
-      role: body.role === 'assistant' ? ('assistant' as const) : ('user' as const),
-      content: String(body.content || ''),
-      created_at: new Date().toISOString(),
-    };
-    conv.messages.push(newMsg);
-    conv.updated_at = new Date().toISOString();
-    persistExpressConversations();
-    res.status(201).json(newMsg);
-  });
-
-  app.patch('/api/v1/conversations/:id', async (req: Request, res: Response) => {
-    const owner = await resolveAuthenticatedEmail(req);
-    if (!owner) {
-      res.status(401).json({ error: 'Authentication is required.' });
-      return;
-    }
-    if (convSupabaseConfigured()) {
-      try {
-        const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-        if (typeof req.body?.title === 'string') patch.title = req.body.title.trim();
-        const rows = await convSupabaseRest(
-          `conversations?id=eq.${convSb(req.params.id)}&owner_email=eq.${convSb(owner)}`,
-          'PATCH',
-          patch
-        );
-        const updated = Array.isArray(rows) ? rows[0] : null;
-        if (!updated) {
-          res.status(404).json({ error: 'Conversation not found' });
-          return;
-        }
-        res.json(updated);
-        return;
-      } catch {
-        /* fall through to local store */
-      }
-    }
-    const conv = expressConversationStore.get(req.params.id);
-    if (!conv || (conv.ownerEmail || '') !== owner) {
-      res.status(404).json({ error: 'Conversation not found' });
-      return;
-    }
-    if (typeof req.body?.title === 'string') {
-      conv.title = req.body.title.trim();
-    }
-    conv.updated_at = new Date().toISOString();
-    persistExpressConversations();
-    res.json(conv);
-  });
-
-  app.delete('/api/v1/conversations/:id', async (req: Request, res: Response) => {
-    const owner = await resolveAuthenticatedEmail(req);
-    if (!owner) {
-      res.status(401).json({ error: 'Authentication is required.' });
-      return;
-    }
-    if (convSupabaseConfigured()) {
-      try {
-        const convRows = await convSupabaseRest(
-          `conversations?id=eq.${convSb(req.params.id)}&select=owner_email`,
-          'GET',
-          undefined,
-          'return=minimal'
-        );
-        const convRow = Array.isArray(convRows) ? convRows[0] : null;
-        if (!convRow || convRow.owner_email !== owner) {
-          res.json({ success: true, deleted: false });
-          return;
-        }
-        await convSupabaseRest(
-          `conversation_messages?conversation_id=eq.${convSb(req.params.id)}`,
-          'DELETE',
-          undefined,
-          'return=minimal'
-        );
-        await convSupabaseRest(
-          `conversations?id=eq.${convSb(req.params.id)}&owner_email=eq.${convSb(owner)}`,
-          'DELETE',
-          undefined,
-          'return=minimal'
-        );
-        res.json({ success: true, deleted: true });
-        return;
-      } catch {
-        /* fall through to local store */
-      }
-    }
-    const conv = expressConversationStore.get(req.params.id);
-    if (!conv || (conv.ownerEmail || '') !== owner) {
-      res.json({ success: true, deleted: false });
-      return;
-    }
-    expressConversationStore.delete(req.params.id);
-    persistExpressConversations();
-    res.json({ success: true, deleted: true });
   });
 
   server.on('error', (err) => {
@@ -10898,6 +11277,14 @@ Rules:
     void shutdown();
   });
 }
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Process] Unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[Process] Uncaught exception:', error);
+});
 
 startServer().catch((error) => {
   console.error('Failed to start server:', error);

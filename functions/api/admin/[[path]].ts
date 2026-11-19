@@ -1,10 +1,13 @@
 import {
   PagesContext,
+  applyCorsHeaders,
   handleCorsPreflight,
+  isSafeGitHubRepoSlug,
   jsonEdgeResponse,
   resolveUpstreamOrigin,
   forwardRawUpstream,
   fetchWithTimeout,
+  timingSafeEqualStrings,
 } from '../../_lib/edgeHelpers';
 
 const DEFAULT_SCHEMA_TABLES = [
@@ -100,7 +103,7 @@ const DEFAULT_GATEWAY_ROUTES = [
 
 export async function onRequest(context: PagesContext): Promise<Response> {
   const { request, env } = context;
-  if (request.method === 'OPTIONS') return handleCorsPreflight(request);
+  if (request.method === 'OPTIONS') return handleCorsPreflight(request, env);
 
   const incomingUrl = new URL(request.url);
   const path = incomingUrl.pathname;
@@ -113,6 +116,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
 
   const configuredKeys = [
     env?.ADMIN_KEY,
+    env?.ADMIN_PASSKEY,
     env?.SUPREMEAI_ADMIN_KEY,
     env?.MCP_ADMIN_KEY,
     env?.SUPERADMIN_KEY,
@@ -120,24 +124,27 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     .filter(Boolean)
     .map((k: any) => String(k).trim());
 
-  let hasAdminCredential = false;
-  if (configuredKeys.length > 0) {
-    hasAdminCredential = Boolean(effectiveToken && configuredKeys.includes(effectiveToken));
-  } else {
-    // When no edge secrets configured, require valid non-trivial admin token
-    hasAdminCredential =
-      Boolean(effectiveToken) &&
-      effectiveToken.length >= 16 &&
-      (effectiveToken.startsWith('adm_') || effectiveToken.startsWith('sk-admin-'));
-  }
+  const hasAdminCredential =
+    configuredKeys.length > 0 &&
+    Boolean(effectiveToken) &&
+    configuredKeys.some((configured) => timingSafeEqualStrings(effectiveToken, configured));
 
   if (!hasAdminCredential && path !== '/api/admin/auth/verify') {
-    return jsonEdgeResponse({ error: 'Administrator elevation is required.' }, 403, request);
+    return jsonEdgeResponse(
+      { error: 'Administrator elevation is required.' },
+      403,
+      request,
+      undefined,
+      env
+    );
   }
 
   // 1. Live GitHub Runs & Pulls via GitHub API on Edge
   if (path.startsWith('/api/admin/github/')) {
     const repo = incomingUrl.searchParams.get('repo')?.trim() || 'Supremeai-bd/supremeai';
+    if (!isSafeGitHubRepoSlug(repo)) {
+      return jsonEdgeResponse({ error: 'Invalid GitHub repository slug.' }, 400, request, undefined, env);
+    }
     const token = env?.GITHUB_TOKEN?.trim() || env?.GITHUB_READONLY_TOKEN?.trim() || '';
     const ghHeaders: Record<string, string> = {
       Accept: 'application/vnd.github+json',
@@ -154,9 +161,9 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         );
         const data = (await res.json().catch(() => ({}))) as any;
         const runs = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
-        return jsonEdgeResponse({ runs, tokenConfigured: Boolean(token) }, 200, request);
+        return jsonEdgeResponse({ runs, tokenConfigured: Boolean(token) }, 200, request, undefined, env);
       } catch {
-        return jsonEdgeResponse({ runs: [], tokenConfigured: Boolean(token) }, 200, request);
+        return jsonEdgeResponse({ runs: [], tokenConfigured: Boolean(token) }, 200, request, undefined, env);
       }
     }
 
@@ -169,9 +176,9 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         );
         const data = (await res.json().catch(() => [])) as any[];
         const pulls = Array.isArray(data) ? data : [];
-        return jsonEdgeResponse({ pulls, tokenConfigured: Boolean(token) }, 200, request);
+        return jsonEdgeResponse({ pulls, tokenConfigured: Boolean(token) }, 200, request, undefined, env);
       } catch {
-        return jsonEdgeResponse({ pulls: [], tokenConfigured: Boolean(token) }, 200, request);
+        return jsonEdgeResponse({ pulls: [], tokenConfigured: Boolean(token) }, 200, request, undefined, env);
       }
     }
   }
@@ -187,13 +194,11 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     if (upRes.status !== 404 && upRes.status !== 405 && upRes.status !== 501) {
       const contentType = upRes.headers.get('content-type') || 'application/json';
       const rawText = await upRes.text();
+      const respHeaders = new Headers({ 'Content-Type': contentType });
+      applyCorsHeaders(respHeaders, request.headers.get('Origin'), incomingUrl.origin, env);
       return new Response(rawText, {
         status: upRes.status,
-        headers: {
-          'Content-Type': contentType,
-          'Access-Control-Allow-Origin': request.headers.get('Origin') || incomingUrl.origin,
-          'Access-Control-Allow-Credentials': 'true',
-        },
+        headers: respHeaders,
       });
     }
   } catch {
