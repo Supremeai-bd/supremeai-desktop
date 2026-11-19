@@ -208,6 +208,24 @@ class ApiClient {
       }
 
       if (!response.ok) {
+        // Detect Cloudflare WAF JS challenge interception or security blockage
+        const rawText = typeof data === 'string' ? data : '';
+        const cfMitigated = response.headers.get('cf-mitigated') || '';
+        const isCloudflareChallenge =
+          cfMitigated === 'challenge' ||
+          rawText.includes('challenge-platform') ||
+          rawText.includes('Just a moment...') ||
+          rawText.includes('cf_chl_opt') ||
+          (!isJson && (response.status === 403 || response.status === 503) && rawText.includes('cloudflare'));
+
+        if (isCloudflareChallenge) {
+          throw new ApiError(
+            'Cloudflare Security Challenge triggered. Please solve the security check or whitelist your network.',
+            response.status,
+            data
+          );
+        }
+
         const body = (typeof data === 'object' && data !== null ? data : {}) as Record<
           string,
           unknown

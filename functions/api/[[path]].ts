@@ -14,7 +14,8 @@ interface PagesContext {
   params?: { path?: string | string[] };
 }
 
-const DEFAULT_UPSTREAM_ORIGIN = 'https://supremeai-api-ulw0.onrender.com';
+const DEFAULT_UPSTREAM_ORIGIN = 'https://supremeai-primary-node-5xso.onrender.com';
+const FALLBACK_UPSTREAM_ORIGIN = 'https://supremeai-api-ulw0.onrender.com';
 
 const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   'host',
@@ -111,7 +112,20 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       upstreamInit.body = request.body;
       upstreamInit.duplex = 'half';
     }
-    const upstreamResponse = await fetch(targetUrl, upstreamInit);
+    let upstreamResponse = await fetch(targetUrl, upstreamInit);
+
+    // If primary upstream returns 502/503/504 or CF challenge/hibernate error, attempt fallback upstream
+    if (!upstreamResponse.ok && [502, 503, 504].includes(upstreamResponse.status)) {
+      try {
+        const fallbackTarget = `${FALLBACK_UPSTREAM_ORIGIN}${incomingUrl.pathname}${incomingUrl.search}`;
+        const fallbackRes = await fetch(fallbackTarget, upstreamInit);
+        if (fallbackRes.ok || fallbackRes.status === 401 || fallbackRes.status === 400 || fallbackRes.status === 422) {
+          upstreamResponse = fallbackRes;
+        }
+      } catch {
+        // Fallback fetch failed, retain original response
+      }
+    }
 
     const responseHeaders = new Headers(upstreamResponse.headers);
     if (mintedGuestSetCookie && !responseHeaders.has('set-cookie')) {
