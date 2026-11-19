@@ -5,7 +5,7 @@
   "identifier": "com.supremeai.desktop",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://127.0.0.1:5173",
+    "devUrl": "http://127.0.0.1:3000",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
@@ -13,16 +13,16 @@
     "windows": [
       {
         "label": "main",
-        "title": "SupremeAI Workstation",
-        "width": 1340,
+        "title": "SupremeAI Studio Desktop",
+        "width": 1380,
         "height": 900,
-        "minWidth": 920,
+        "minWidth": 960,
         "minHeight": 640,
         "resizable": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https:; img-src 'self' data: blob:; font-src 'self' https://fonts.gstatic.com data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; frame-src 'self' blob: data:"
     }
   },
   "plugins": {

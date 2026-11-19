@@ -1,24 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { Check, MessageSquareHeart, X } from 'lucide-react';
+import { submitDesktopFeedback } from '../bridge/desktopBridge';
 import { useI18n } from '../i18n';
 
-/**
- * Product pulse widget — a port of the web app's `WorkspaceMicroSurvey`
- * (supremeai-frontend/src/components/chat/WorkspaceTipsAndSurvey.tsx) so the
- * desktop asks the same question, at the same moment, with the same wording.
- *
- * Parity notes:
- *  * four ratings (great / good / okay / needs_work) in the same order;
- *  * auto-surfaces after 4 user messages, snoozed for 3 days, submitted
- *    feedback is quiet for 14 days, "don't ask" is permanent;
- *  * submission goes through the native `submit_feedback` command, which posts
- *    the web contract's `{event_type, payload.context}` to
- *    `/api/feedback/ingest` using the signed-in session token.
- */
-
 const SURVEY_STORAGE_KEY = 'supremeai.desktop.survey.v1';
-const SUBMIT_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
-const SNOOZE_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+const SUBMIT_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000;
+const SNOOZE_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000;
 const MIN_USER_MESSAGES = 4;
 
 type SurveyRating = 'great' | 'good' | 'okay' | 'needs_work';
@@ -73,7 +60,7 @@ export default function FeedbackWidget({
       { id: 'okay', label: t.surveyRatingOkay },
       { id: 'needs_work', label: t.surveyRatingNeedsWork },
     ],
-    [t],
+    [t]
   );
 
   const shouldAutoShow = useMemo(() => {
@@ -91,7 +78,7 @@ export default function FeedbackWidget({
     try {
       localStorage.setItem(SURVEY_STORAGE_KEY, JSON.stringify(next));
     } catch {
-      // Losing the cooldown marker only means the widget may ask again later.
+      // Best effort
     }
   }
 
@@ -118,7 +105,7 @@ export default function FeedbackWidget({
     setIsSubmitting(true);
     setError('');
     try {
-      await invoke('submit_feedback', {
+      await submitDesktopFeedback({
         rating,
         suggestion: suggestion.trim(),
         language: lang,
@@ -139,31 +126,55 @@ export default function FeedbackWidget({
   }
 
   return (
-    <section className="feedback-widget" aria-label={t.surveyTitle}>
-      <header className="feedback-head">
-        <span className="feedback-mark" aria-hidden="true">✦</span>
-        <div>
-          <h3>{t.surveyTitle}</h3>
-          <p>{t.surveySubtitle}</p>
+    <section
+      className="fixed bottom-5 right-5 z-50 w-88 max-w-[calc(100vw-2rem)] rounded-2xl border theme-surface-strong p-4 space-y-3"
+      aria-label={t.surveyTitle}
+    >
+      <header className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-2.5">
+          <span className="w-8 h-8 rounded-xl theme-accent-active border flex items-center justify-center shrink-0">
+            <MessageSquareHeart className="w-4 h-4" />
+          </span>
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              {t.surveyTitle}
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">{t.surveySubtitle}</p>
+          </div>
         </div>
-        <button className="icon-button feedback-close" type="button" aria-label={t.close} onClick={handleSnooze}>
-          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        <button
+          type="button"
+          aria-label={t.close}
+          onClick={handleSnooze}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+        >
+          <X className="w-4 h-4" />
         </button>
       </header>
 
       {submittedDone ? (
-        <p className="feedback-thanks" role="status"><span aria-hidden="true">✓</span> {t.surveyThanks}</p>
+        <div
+          role="status"
+          className="flex items-center gap-2 py-3 px-3 rounded-xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs font-medium"
+        >
+          <Check className="w-4 h-4 shrink-0" />
+          <span>{t.surveyThanks}</span>
+        </div>
       ) : (
-        <form className="feedback-form" onSubmit={handleSubmit}>
-          <div className="feedback-ratings" role="radiogroup" aria-label={t.surveySubtitle}>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label={t.surveySubtitle}>
             {ratingOptions.map((option) => (
               <button
                 key={option.id}
                 type="button"
                 role="radio"
                 aria-checked={rating === option.id}
-                className={`feedback-rating ${rating === option.id ? 'feedback-rating--active' : ''}`}
                 onClick={() => setRating(option.id)}
+                className={`py-2 px-3 rounded-xl text-xs font-medium border transition-colors cursor-pointer ${
+                  rating === option.id
+                    ? 'theme-accent-active'
+                    : 'border-slate-200/80 dark:border-slate-700/70 bg-white/60 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600'
+                }`}
               >
                 {option.label}
               </button>
@@ -171,24 +182,44 @@ export default function FeedbackWidget({
           </div>
 
           <textarea
-            className="feedback-input"
             rows={2}
             value={suggestion}
             maxLength={2000}
             onChange={(event) => setSuggestion(event.target.value)}
             placeholder={t.surveyPlaceholder}
             aria-label={t.surveyPlaceholder}
+            className="w-full px-3 py-2 rounded-xl text-xs border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/70 text-slate-900 dark:text-slate-100 resize-none"
           />
 
-          {error && <p className="feedback-error" role="alert">{error}</p>}
+          {error && (
+            <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">
+              {error}
+            </p>
+          )}
 
-          <div className="feedback-actions">
-            <div className="feedback-dismiss">
-              <button type="button" onClick={handleSnooze}>{t.surveyLater}</button>
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <button
+                type="button"
+                onClick={handleSnooze}
+                className="hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer"
+              >
+                {t.surveyLater}
+              </button>
               <span aria-hidden="true">·</span>
-              <button type="button" onClick={handleNeverAsk}>{t.surveyDontAsk}</button>
+              <button
+                type="button"
+                onClick={handleNeverAsk}
+                className="hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer"
+              >
+                {t.surveyDontAsk}
+              </button>
             </div>
-            <button type="submit" className="feedback-send" disabled={!rating || isSubmitting}>
+            <button
+              type="submit"
+              disabled={!rating || isSubmitting}
+              className="px-4 py-1.5 rounded-xl text-xs font-semibold theme-btn-primary disabled:opacity-45 cursor-pointer"
+            >
               {isSubmitting ? t.surveySending : t.surveySend}
             </button>
           </div>

@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -11,14 +12,14 @@ const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('./package.json', impo
 
 export default defineConfig({
   base: './',
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   clearScreen: false,
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
   server: {
-    host: '127.0.0.1',
-    port: 5173,
+    host: '0.0.0.0',
+    port: 3000,
     strictPort: true,
   },
   build: {

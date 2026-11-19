@@ -1,0 +1,7 @@
+{
+  "name": "SupremeAI Studio Desktop",
+  "description": "Bilingual AI workspace and developer studio desktop application built with Tauri v2, React 19, Three.js, Monaco Editor, and xterm.js — synced with SupremeAI Studio.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

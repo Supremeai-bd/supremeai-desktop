@@ -177,7 +177,7 @@ export default function HolographicHero({
       >
         <div className="holo-badge">
           <span className="holo-status-dot" />
-          <span>{isDocked ? '⠿ DRAG ME' : `HOLO-AI 3D // ${internalState.toUpperCase()}`}</span>
+          <span>{isDocked ? 'Drag to reposition' : `SupremeAI 3D Companion · ${internalState}`}</span>
         </div>
 
         <div style={{ display: 'flex', gap: '6px' }}>

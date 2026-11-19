@@ -1,30 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import './admin.css';
+import { Activity, Building2, LayoutGrid, LogOut, RefreshCw, Search, Shield, X } from 'lucide-react';
+import {
+  adminFetchDashboard,
+  adminLogin,
+  adminLogout,
+  adminVerifyTotp,
+  type AdminDashboardData,
+  type AdminRole,
+  type AdminTenant,
+  type AdminUsage,
+} from '../bridge/desktopBridge';
+import { BrandMark } from '../components/BrandMark';
 
-type AdminRole = 'admin' | 'tenant_admin';
-type LoginResult = { status: string; role?: AdminRole; email?: string };
-type Tenant = {
-  tenant_id: string;
-  org_name?: string | null;
-  billing_tier?: string | null;
-  created_at?: string | null;
-  requests_per_minute?: number | null;
-  max_tokens_per_day?: number | null;
-  max_concurrent_sessions?: number | null;
-};
-type Usage = { tenant_id: string; requests_today: number; tokens_today: number; cost_today: number };
-type TenantOverview = { total: number; tenants: Tenant[]; usages: Usage[]; truncated?: boolean };
-type HealthItem = { status?: string; provider?: string; region?: string; latency_ms?: number; live_uptime_seconds?: number; configured?: boolean };
-type DashboardData = {
-  scope: 'platform' | 'tenant';
-  role: AdminRole;
-  email?: string;
-  tenantOverview?: TenantOverview;
-  health?: Record<string, HealthItem>;
-  tenant?: Tenant;
-  usage?: Usage;
-};
 type AdminView = 'overview' | 'services' | 'tenants';
 
 function displayCount(value: number | null | undefined) {
@@ -34,44 +21,87 @@ function displayCount(value: number | null | undefined) {
 
 function displayCost(value: number | undefined) {
   if (value == null || !Number.isFinite(value)) return '—';
-  return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(value);
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 4,
+  }).format(value);
 }
 
-function statusTone(status?: string) {
-  const normalized = status?.trim().toLowerCase();
-  if (['healthy', 'ready', 'ok', 'up', 'operational'].includes(normalized ?? '')) return 'admin-status--healthy';
-  if (['degraded', 'warning', 'limited'].includes(normalized ?? '')) return 'admin-status--warning';
-  if (['down', 'offline', 'unhealthy', 'failed', 'error', 'critical'].includes(normalized ?? '')) return 'admin-status--offline';
-  return 'admin-status--unknown';
-}
-
-function statusLabel(status?: string) {
-  const normalized = status?.trim().toLowerCase();
-  if (['healthy', 'ready', 'ok', 'up', 'operational'].includes(normalized ?? '')) return 'healthy';
-  if (['degraded', 'warning', 'limited'].includes(normalized ?? '')) return 'degraded';
-  if (['down', 'offline', 'unhealthy', 'failed', 'error', 'critical'].includes(normalized ?? '')) return 'down';
-  return 'unknown';
-}
-
-function isHealthyStatus(status?: string) {
-  return statusTone(status) === 'admin-status--healthy';
+function statusMeta(status?: string) {
+  const n = status?.trim().toLowerCase() ?? '';
+  if (['healthy', 'ready', 'ok', 'up', 'operational'].includes(n)) {
+    return { label: 'Healthy', cls: 'text-emerald-600 dark:text-emerald-400' };
+  }
+  if (['degraded', 'warning', 'limited'].includes(n)) {
+    return { label: 'Degraded', cls: 'text-amber-600 dark:text-amber-400' };
+  }
+  if (['down', 'offline', 'unhealthy', 'failed', 'error', 'critical'].includes(n)) {
+    return { label: 'Down', cls: 'text-rose-600 dark:text-rose-400' };
+  }
+  return { label: 'Unknown', cls: 'text-slate-500 dark:text-slate-400' };
 }
 
 function prettify(value: string) {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function TenantTable({ tenants, usageByTenant, emptyMessage }: { tenants: Tenant[]; usageByTenant: Map<string, Usage>; emptyMessage: string }) {
+function TenantTable({
+  tenants,
+  usageByTenant,
+  emptyMessage,
+}: {
+  tenants: AdminTenant[];
+  usageByTenant: Map<string, AdminUsage>;
+  emptyMessage: string;
+}) {
   return (
-    <div className="admin-table-wrap">
-      <table className="admin-table">
-        <thead><tr><th>Organization</th><th>Plan</th><th>Requests today</th><th>Tokens today</th><th>Cost today</th></tr></thead>
-        <tbody>
+    <div className="overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800">
+      <table className="w-full text-left border-collapse text-xs">
+        <thead>
+          <tr className="border-b border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/70 text-slate-500 dark:text-slate-400">
+            <th className="py-2.5 px-4 font-semibold">Organization</th>
+            <th className="py-2.5 px-4 font-semibold">Plan</th>
+            <th className="py-2.5 px-4 font-semibold text-right">Requests today</th>
+            <th className="py-2.5 px-4 font-semibold text-right">Tokens today</th>
+            <th className="py-2.5 px-4 font-semibold text-right">Cost today</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800/80">
           {tenants.map((tenant) => {
             const usage = usageByTenant.get(tenant.tenant_id);
-            return <tr key={tenant.tenant_id}><td><strong>{tenant.org_name || 'Unnamed tenant'}</strong><small className="admin-tenant-id">{tenant.tenant_id}</small></td><td>{tenant.billing_tier || '—'}</td><td>{displayCount(usage?.requests_today)}</td><td>{displayCount(usage?.tokens_today)}</td><td>{displayCost(usage?.cost_today)}</td></tr>;
+            return (
+              <tr key={tenant.tenant_id} className="hover:bg-slate-100/50 dark:hover:bg-slate-800/40">
+                <td className="py-3 px-4">
+                  <div className="font-semibold text-slate-900 dark:text-slate-100">
+                    {tenant.org_name || 'Unnamed tenant'}
+                  </div>
+                  <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                    {tenant.tenant_id}
+                  </div>
+                </td>
+                <td className="py-3 px-4 text-slate-700 dark:text-slate-300">
+                  {tenant.billing_tier || '—'}
+                </td>
+                <td className="py-3 px-4 text-right font-mono tabular-nums text-slate-800 dark:text-slate-200">
+                  {displayCount(usage?.requests_today)}
+                </td>
+                <td className="py-3 px-4 text-right font-mono tabular-nums text-slate-800 dark:text-slate-200">
+                  {displayCount(usage?.tokens_today)}
+                </td>
+                <td className="py-3 px-4 text-right font-mono tabular-nums text-slate-800 dark:text-slate-200">
+                  {displayCost(usage?.cost_today)}
+                </td>
+              </tr>
+            );
           })}
-          {tenants.length === 0 && <tr><td colSpan={5} className="admin-empty-cell">{emptyMessage}</td></tr>}
+          {tenants.length === 0 && (
+            <tr>
+              <td colSpan={5} className="py-8 px-4 text-center text-slate-500 dark:text-slate-400">
+                {emptyMessage}
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
@@ -80,7 +110,6 @@ function TenantTable({ tenants, usageByTenant, emptyMessage }: { tenants: Tenant
 
 export default function AdminDashboard({ onClose }: { onClose: () => void }) {
   const dialogRef = useRef<HTMLElement | null>(null);
-  const closeRef = useRef<() => void>(() => undefined);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [otp, setOtp] = useState('');
@@ -88,7 +117,7 @@ export default function AdminDashboard({ onClose }: { onClose: () => void }) {
   const [needsSetup, setNeedsSetup] = useState(false);
   const [role, setRole] = useState<AdminRole | null>(null);
   const [sessionEmail, setSessionEmail] = useState('');
-  const [data, setData] = useState<DashboardData | null>(null);
+  const [data, setData] = useState<AdminDashboardData | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
   const [notice, setNotice] = useState('');
@@ -96,16 +125,26 @@ export default function AdminDashboard({ onClose }: { onClose: () => void }) {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [tenantSearch, setTenantSearch] = useState('');
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   async function refreshDashboard() {
     setLoadingData(true);
     setNotice('');
     try {
-      const result = await invoke<DashboardData>('admin_dashboard');
+      const result = await adminFetchDashboard();
       setData(result);
       setLastUpdated(new Date());
       if (result.email) setSessionEmail(result.email);
     } catch (error) {
-      setNotice(typeof error === 'string' ? error : 'The admin dashboard could not be refreshed.');
+      setNotice(
+        typeof error === 'string' ? error : 'The admin dashboard could not be refreshed.'
+      );
     } finally {
       setLoadingData(false);
     }
@@ -116,7 +155,7 @@ export default function AdminDashboard({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setNotice('');
     try {
-      const result = await invoke<LoginResult>('admin_login', { mode: 'owner', email, password });
+      const result = await adminLogin(email, password);
       if (result.status === 'otp_required') {
         setNeedsOtp(true);
         setNeedsSetup(false);
@@ -134,7 +173,9 @@ export default function AdminDashboard({ onClose }: { onClose: () => void }) {
       setSessionEmail(result.email || email);
       await refreshDashboard();
     } catch (error) {
-      setNotice(typeof error === 'string' ? error : error instanceof Error ? error.message : 'Sign-in failed.');
+      setNotice(
+        typeof error === 'string' ? error : error instanceof Error ? error.message : 'Sign-in failed.'
+      );
     } finally {
       setPassword('');
       setBusy(false);
@@ -146,7 +187,7 @@ export default function AdminDashboard({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setNotice('');
     try {
-      const result = await invoke<LoginResult>('admin_verify_totp', { otp });
+      const result = await adminVerifyTotp(otp);
       setOtp('');
       if (result.status !== 'authenticated' || result.role !== 'admin') {
         throw new Error('The verification service returned an invalid session.');
@@ -156,7 +197,13 @@ export default function AdminDashboard({ onClose }: { onClose: () => void }) {
       setNeedsOtp(false);
       await refreshDashboard();
     } catch (error) {
-      setNotice(typeof error === 'string' ? error : error instanceof Error ? error.message : 'Verification failed.');
+      setNotice(
+        typeof error === 'string'
+          ? error
+          : error instanceof Error
+            ? error.message
+            : 'Verification failed.'
+      );
     } finally {
       setOtp('');
       setBusy(false);
@@ -165,11 +212,7 @@ export default function AdminDashboard({ onClose }: { onClose: () => void }) {
 
   async function signOut() {
     setBusy(true);
-    try {
-      await invoke('admin_logout');
-    } catch {
-      // Native session is cleared by the command even if the best-effort server logout is unavailable.
-    }
+    await adminLogout();
     setData(null);
     setLastUpdated(null);
     setActiveView('overview');
@@ -185,186 +228,351 @@ export default function AdminDashboard({ onClose }: { onClose: () => void }) {
     setBusy(false);
   }
 
-  function closeConsole() {
-    // ROOT-CAUSE FIX (2026-11-01): closing the console (x / Escape) must only
-    // close the dialog. It previously called admin_logout on every close,
-    // which was the main driver of the repeated forced logouts. Signing out
-    // now happens only through the explicit "Sign out" button.
-    onClose();
-  }
-  closeRef.current = closeConsole;
-
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const dialog = dialogRef.current;
-    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ) ?? []);
-    focusable()[0]?.focus();
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeRef.current();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const items = focusable();
-      if (items.length === 0) {
-        event.preventDefault();
-        dialog?.focus();
-        return;
-      }
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      } else if (!dialog?.contains(document.activeElement)) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      previousFocus?.focus();
-    };
-  }, []);
-
   const overview = data?.tenantOverview;
-  const usageByTenant = new Map<string, Usage>((overview?.usages ?? []).map((usage): [string, Usage] => [usage.tenant_id, usage]));
-  const totalRequests = (overview?.usages ?? []).reduce((sum, usage) => sum + (usage.requests_today || 0), 0);
-  const totalTokens = (overview?.usages ?? []).reduce((sum, usage) => sum + (usage.tokens_today || 0), 0);
+  const usageByTenant = new Map<string, AdminUsage>(
+    (overview?.usages ?? []).map((u) => [u.tenant_id, u])
+  );
+  const totalRequests = (overview?.usages ?? []).reduce((sum, u) => sum + (u.requests_today || 0), 0);
   const registeredTenants = (overview?.tenants ?? []).length;
-  const healthEntries = Object.entries(data?.health ?? {}).sort(([, left], [, right]) => {
-    const priority = (status?: string) => statusTone(status) === 'admin-status--offline' ? 0 : statusTone(status) === 'admin-status--warning' ? 1 : statusTone(status) === 'admin-status--unknown' ? 2 : 3;
-    return priority(left.status) - priority(right.status);
-  });
-  const attentionEntries = healthEntries.filter(([, item]) => !isHealthyStatus(item.status));
-  const healthSummary = healthEntries.length === 0
-    ? 'Unavailable'
-    : attentionEntries.length === 0
-      ? 'All reported healthy'
-      : `${attentionEntries.length} need attention`;
-  const healthSummaryTone = healthEntries.length === 0
-    ? 'admin-status--unknown'
-    : attentionEntries.some(([, item]) => statusTone(item.status) === 'admin-status--offline')
-      ? 'admin-status--offline'
-      : attentionEntries.length > 0
-        ? 'admin-status--warning'
-        : 'admin-status--healthy';
+  const healthEntries = Object.entries(data?.health ?? {});
+  const attentionEntries = healthEntries.filter(([, item]) => statusMeta(item.status).label !== 'Healthy');
   const filteredTenants = (overview?.tenants ?? []).filter((tenant) => {
-    const query = tenantSearch.trim().toLowerCase();
-    return !query || [tenant.org_name, tenant.tenant_id, tenant.billing_tier].some((value) => value?.toLowerCase().includes(query));
+    const q = tenantSearch.trim().toLowerCase();
+    return (
+      !q ||
+      [tenant.org_name, tenant.tenant_id, tenant.billing_tier].some((val) =>
+        val?.toLowerCase().includes(q)
+      )
+    );
   });
+
   const fetchedAtLabel = lastUpdated
-    ? new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(lastUpdated)
+    ? new Intl.DateTimeFormat(undefined, {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }).format(lastUpdated)
     : 'Not fetched';
 
   return (
-    <div className="admin-overlay" role="presentation">
-      <section ref={dialogRef} className="admin-window" role="dialog" aria-modal="true" aria-label="SupremeAI admin console" tabIndex={-1}>
-        <header className="admin-header">
-          <div className="admin-brand"><span className="admin-brand-mark">S</span><span><strong>SUPREMEAI CONTROL CENTER</strong><small>Evidence-first · read-only workspace</small></span></div>
-          <div className="admin-header-actions">
-            {role && <span className="admin-refresh-meta" aria-live="polite">Fetched {fetchedAtLabel}</span>}
-            {role && <span className="admin-session-label">{role === 'admin' ? 'PLATFORM OWNER' : 'TENANT ADMIN'}</span>}
-            {role && <button className="admin-button admin-button--quiet" onClick={() => void refreshDashboard()} disabled={loadingData || busy}>{loadingData ? 'Refreshing…' : 'Refresh'}</button>}
-            {role && <button className="admin-button admin-button--quiet" onClick={() => void signOut()} disabled={busy}>Sign out</button>}
-            <button className="admin-close" type="button" aria-label="Return to chat" onClick={closeConsole}>×</button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/65 backdrop-blur-sm">
+      <section
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="SupremeAI Control Center"
+        className="w-full max-w-5xl h-[86vh] rounded-2xl border theme-surface-strong flex flex-col overflow-hidden shadow-2xl"
+      >
+        <header className="flex items-center justify-between gap-4 px-5 py-3.5 border-b border-slate-200/80 dark:border-slate-800 shrink-0">
+          <div className="flex items-center gap-3">
+            <BrandMark size={30} />
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-white leading-tight">
+                SupremeAI Control Center
+              </h2>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Evidence-first · read-only operations console
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {role && (
+              <>
+                <span className="hidden sm:inline text-xs font-mono text-slate-500 dark:text-slate-400 tabular-nums">
+                  Fetched {fetchedAtLabel}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void refreshDashboard()}
+                  disabled={loadingData || busy}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingData ? 'animate-spin' : ''}`} />
+                  <span>{loadingData ? 'Refreshing…' : 'Refresh'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void signOut()}
+                  disabled={busy}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Sign out</span>
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close Control Center"
+              className="p-2 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         </header>
 
         {!role ? (
-          <main className="admin-auth-layout">
-            <div className="admin-auth-copy">
-              <span className="admin-eyebrow">SUPREMEAI · ADMINISTRATION</span>
-              <h1>Operations,<br /><em>in one place.</em></h1>
-              <p>Sign in to review system health and tenant usage. This first release is read-only; it cannot change accounts, limits, or service settings.</p>
-              <div className="admin-security-note"><span aria-hidden="true">●</span><span>Tenant-admin sign-in is disabled until owner-controlled provisioning, scoped permissions, and audit controls are ready.</span></div>
+          <div className="flex-1 overflow-y-auto studio-scroll grid grid-cols-1 md:grid-cols-2 gap-8 items-center p-8">
+            <div className="space-y-4">
+              <div className="inline-flex items-center gap-2 text-xs font-medium theme-accent-text">
+                <Shield className="w-4 h-4" />
+                <span>SupremeAI Administration</span>
+              </div>
+              <h1 className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-white text-balance">
+                Operations, <span className="theme-accent-gradient-text">in one place.</span>
+              </h1>
+              <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                Sign in with your platform owner credentials to inspect live service health, gateway
+                latency, and tenant usage records. Read-only mode protects cluster configuration.
+              </p>
             </div>
-            <form className="admin-login-card" onSubmit={needsOtp ? verifyTotp : signIn}>
-              <div className="admin-card-kicker">SECURE ACCESS</div>
+
+            <form
+              onSubmit={needsOtp ? verifyTotp : signIn}
+              className="p-6 rounded-2xl border theme-surface-glass space-y-4"
+            >
               {needsSetup ? (
                 <>
-                  <h2>Two-factor setup required</h2>
-                  <p className="admin-form-copy">Complete owner TOTP enrollment through the existing admin setup flow, then return here to sign in.</p>
-                  <button type="button" className="admin-button admin-button--primary" onClick={() => setNeedsSetup(false)}>Back to sign in</button>
+                  <h3 className="text-base font-semibold text-slate-900 dark:text-white">
+                    Two-factor setup required
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Complete owner TOTP enrollment through the admin setup flow, then return here to
+                    sign in.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setNeedsSetup(false)}
+                    className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold theme-btn-primary cursor-pointer"
+                  >
+                    Back to sign in
+                  </button>
                 </>
               ) : needsOtp ? (
                 <>
-                  <h2>Verify it’s you</h2>
-                  <p className="admin-form-copy">Enter the six-digit code from your authenticator app.</p>
-                  <label className="admin-field"><span>AUTHENTICATION CODE</span><input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" /></label>
-                  <button type="submit" className="admin-button admin-button--primary" disabled={busy || otp.length !== 6}>{busy ? 'Verifying…' : 'Verify and continue'}</button>
-                  <button type="button" className="admin-text-button" onClick={() => { setNeedsOtp(false); setOtp(''); }}>Use a different sign-in</button>
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-white">
+                      Verify authentication code
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      Enter the 6-digit code from your authenticator app.
+                    </p>
+                  </div>
+                  <input
+                    autoFocus
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="000000"
+                    className="w-full px-3.5 py-2.5 rounded-xl font-mono text-center tracking-widest text-base border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                  />
+                  <button
+                    type="submit"
+                    disabled={busy || otp.length !== 6}
+                    className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold theme-btn-primary disabled:opacity-50 cursor-pointer"
+                  >
+                    {busy ? 'Verifying…' : 'Verify and continue'}
+                  </button>
                 </>
               ) : (
                 <>
-                  <h2>Sign in</h2>
-                  <p className="admin-form-copy">Platform owner access. Verify with your existing SupremeAI credentials.</p>
-                  <label className="admin-field"><span>EMAIL</span><input type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required /></label>
-                  <label className="admin-field"><span>PASSWORD</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
-                  <button type="submit" className="admin-button admin-button--primary" disabled={busy}>{busy ? 'Signing in…' : 'Continue securely'}</button>
-                  <p className="admin-form-footnote">Your session stays signed in on this device until you choose Sign out.</p>
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-white">
+                      Platform owner sign in
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      Verify with your SupremeAI administrator credentials.
+                    </p>
+                  </div>
+                  <div className="space-y-3">
+                    <label className="block space-y-1">
+                      <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                        Email
+                      </span>
+                      <input
+                        type="email"
+                        required
+                        autoComplete="username"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="owner@supremeai.dev"
+                        className="w-full px-3 py-2 rounded-xl text-sm border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                      />
+                    </label>
+                    <label className="block space-y-1">
+                      <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                        Password
+                      </span>
+                      <input
+                        type="password"
+                        required
+                        autoComplete="current-password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl text-sm border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                      />
+                    </label>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={busy}
+                    className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold theme-btn-primary disabled:opacity-50 cursor-pointer"
+                  >
+                    {busy ? 'Signing in…' : 'Continue securely'}
+                  </button>
                 </>
               )}
-              {notice && <p className="admin-notice" role="alert">{notice}</p>}
+              {notice && (
+                <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">
+                  {notice}
+                </p>
+              )}
             </form>
-          </main>
+          </div>
         ) : (
-          <div className="admin-workspace">
-            <nav className="admin-nav" aria-label="Admin sections">
-              <span className="admin-nav-label">WORKSPACE</span>
-              <button type="button" className={`admin-nav-item ${activeView === 'overview' ? 'admin-nav-item--active' : ''}`} aria-current={activeView === 'overview' ? 'page' : undefined} onClick={() => setActiveView('overview')}><span aria-hidden="true">⌂</span>Overview</button>
-              {role === 'admin' && <>
-                <button type="button" className={`admin-nav-item ${activeView === 'services' ? 'admin-nav-item--active' : ''}`} aria-current={activeView === 'services' ? 'page' : undefined} onClick={() => setActiveView('services')}><span aria-hidden="true">◈</span>Services <span className="admin-nav-count">{healthEntries.length || '—'}</span></button>
-                <button type="button" className={`admin-nav-item ${activeView === 'tenants' ? 'admin-nav-item--active' : ''}`} aria-current={activeView === 'tenants' ? 'page' : undefined} onClick={() => setActiveView('tenants')}><span aria-hidden="true">▦</span>Tenants <span className="admin-nav-count">{displayCount(overview?.total ?? overview?.tenants?.length)}</span></button>
-              </>}
-              <div className="admin-nav-note"><strong>Read-only access</strong><span>Changes and service controls are not available in this workspace.</span></div>
+          <div className="flex-1 min-h-0 flex overflow-hidden">
+            <nav className="w-52 shrink-0 border-r border-slate-200/80 dark:border-slate-800 p-3 space-y-1">
+              {(
+                [
+                  ['overview', 'Overview', LayoutGrid, undefined],
+                  ['services', 'Services', Activity, healthEntries.length],
+                  ['tenants', 'Tenants', Building2, overview?.total ?? registeredTenants],
+                ] as const
+              ).map(([id, label, Icon, count]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setActiveView(id)}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                    activeView === id
+                      ? 'theme-accent-active border'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                  }`}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <Icon className="w-4 h-4" />
+                    <span>{label}</span>
+                  </span>
+                  {count !== undefined && (
+                    <span className="font-mono tabular-nums text-[11px]">{count}</span>
+                  )}
+                </button>
+              ))}
             </nav>
-            <main className="admin-content">
-              <div className="admin-page-heading"><div><span className="admin-eyebrow">{data?.scope === 'platform' ? 'PLATFORM WORKSPACE' : 'TENANT WORKSPACE'}</span><h1>{activeView === 'services' ? 'Services & health' : activeView === 'tenants' ? 'Tenants & usage' : data?.scope === 'platform' ? 'Control center' : data?.tenant?.org_name || 'Tenant overview'}</h1><p>{sessionEmail} · {data?.scope === 'platform' ? 'Platform scope' : 'Server-assigned tenant scope'}</p></div><span className="admin-readonly-pill">READ ONLY</span></div>
-              {notice && <p className="admin-notice admin-notice--wide" role="status">{notice}{data && lastUpdated ? ` Showing the last fetched snapshot from ${fetchedAtLabel}.` : ''}</p>}
-              {loadingData && !data ? <div className="admin-loading" role="status">Loading authorized dashboard data…</div> : data?.scope === 'platform' ? (
+
+            <main className="flex-1 overflow-y-auto studio-scroll p-6 space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h1 className="text-xl font-semibold text-slate-900 dark:text-white">
+                    {activeView === 'services'
+                      ? 'Services & Health'
+                      : activeView === 'tenants'
+                        ? 'Tenants & Usage'
+                        : 'Platform Overview'}
+                  </h1>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {sessionEmail} · Read-only scope
+                  </p>
+                </div>
+              </div>
+
+              {notice && (
+                <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs text-amber-800 dark:text-amber-200">
+                  {notice}
+                </div>
+              )}
+
+              {activeView === 'overview' && (
                 <>
-                  {activeView === 'overview' && <>
-                    <section className="admin-metric-grid" aria-label="Platform overview">
-                      <article className="admin-metric-card"><span>SERVICE HEALTH</span><strong className={`admin-metric-status ${healthSummaryTone}`}>{healthSummary}</strong><small>{healthEntries.length ? `${healthEntries.length} reported service${healthEntries.length === 1 ? '' : 's'}` : 'No health data returned'}</small></article>
-                      <article className="admin-metric-card"><span>NEEDS ATTENTION</span><strong>{displayCount(healthEntries.length ? attentionEntries.length : undefined)}</strong><small>degraded, down, or unknown</small></article>
-                      <article className="admin-metric-card"><span>CONFIGURED TENANTS</span><strong>{displayCount(overview?.total ?? (overview ? registeredTenants : undefined))}</strong><small>tenant limit records</small></article>
-                      <article className="admin-metric-card"><span>REQUESTS TODAY</span><strong>{displayCount(overview?.usages?.length ? totalRequests : undefined)}</strong><small>recorded UTC daily totals</small></article>
-                    </section>
-                    <section className="admin-section">
-                      <div className="admin-section-heading"><div><span className="admin-eyebrow">PRIORITY QUEUE</span><h2>Needs attention</h2></div><button type="button" className="admin-link-button" onClick={() => setActiveView('services')}>View all services <span aria-hidden="true">→</span></button></div>
-                      {healthEntries.length === 0 ? <div className="admin-inline-state"><strong>Health data unavailable</strong><span>The service health endpoint did not return any service records. Refresh to try again.</span></div> : attentionEntries.length === 0 ? <div className="admin-inline-state admin-inline-state--healthy"><strong>All reported services are healthy</strong><span>Based on the latest fetched health response at {fetchedAtLabel}; this is not a guarantee of end-to-end availability.</span></div> : <div className="admin-attention-list">{attentionEntries.slice(0, 5).map(([name, item]) => <button type="button" className="admin-attention-row" key={name} onClick={() => setActiveView('services')}><span className={`admin-status ${statusTone(item.status)}`}><i />{statusLabel(item.status)}</span><strong>{prettify(name)}</strong><span>{[item.provider, item.region, item.latency_ms != null ? `${item.latency_ms} ms` : null].filter(Boolean).join(' · ') || 'No further health detail reported'}</span><span aria-hidden="true">→</span></button>)}</div>}
-                    </section>
-                    <section className="admin-section">
-                      <div className="admin-section-heading"><div><span className="admin-eyebrow">USAGE SNAPSHOT</span><h2>Top tenants by recorded requests</h2></div><button type="button" className="admin-link-button" onClick={() => setActiveView('tenants')}>Open tenant list <span aria-hidden="true">→</span></button></div>
-                      <TenantTable tenants={[...(overview?.tenants ?? [])].sort((left, right) => (usageByTenant.get(right.tenant_id)?.requests_today ?? -1) - (usageByTenant.get(left.tenant_id)?.requests_today ?? -1)).slice(0, 5)} usageByTenant={usageByTenant} emptyMessage="No tenant records were returned." />
-                    </section>
-                  </>}
-                  {activeView === 'services' && <section className="admin-section admin-section--first">
-                    <div className="admin-section-heading"><div><span className="admin-eyebrow">INFRASTRUCTURE</span><h2>Reported service health</h2></div><span>{healthEntries.length ? `${healthEntries.length} records · fetched ${fetchedAtLabel}` : 'No health snapshot available'}</span></div>
-                    {healthEntries.length ? <div className="admin-health-grid">{healthEntries.map(([name, item]) => <article className="admin-health-card" key={name}><div><span className="admin-health-name">{prettify(name)}</span><span className={`admin-status ${statusTone(item.status)}`}><i />{statusLabel(item.status)}</span></div><small>{[item.provider, item.region, item.latency_ms != null ? `${item.latency_ms} ms` : null].filter(Boolean).join(' · ') || 'No additional detail reported'}</small></article>)}</div> : <div className="admin-inline-state"><strong>Health data unavailable</strong><span>No service records were returned. A missing response is not treated as healthy.</span></div>}
-                  </section>}
-                  {activeView === 'tenants' && <section className="admin-section admin-section--first">
-                    <div className="admin-section-heading"><div><span className="admin-eyebrow">TENANT MANAGEMENT</span><h2>Tenants</h2></div><span>{displayCount(overview?.total ?? (overview ? registeredTenants : undefined))} records · read only</span></div>
-                    <label className="admin-search"><span aria-hidden="true">⌕</span><input type="search" value={tenantSearch} onChange={(event) => setTenantSearch(event.target.value)} placeholder="Search organization, tenant ID, or plan" aria-label="Search tenants" /></label>
-                    <TenantTable tenants={filteredTenants} usageByTenant={usageByTenant} emptyMessage={tenantSearch ? 'No tenants match this search.' : 'No tenant records were returned.'} />
-                    {overview?.truncated && <p className="admin-form-footnote">The service returned a truncated tenant list. Refine the search or use the administration API for a paginated export.</p>}
-                  </section>}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+                    <div className="p-4 rounded-xl border theme-surface-glass">
+                      <div className="text-xs text-slate-500 dark:text-slate-400">Reported services</div>
+                      <div className="mt-1 text-2xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white">
+                        {healthEntries.length}
+                      </div>
+                    </div>
+                    <div className="p-4 rounded-xl border theme-surface-glass">
+                      <div className="text-xs text-slate-500 dark:text-slate-400">Needs attention</div>
+                      <div className="mt-1 text-2xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white">
+                        {attentionEntries.length}
+                      </div>
+                    </div>
+                    <div className="p-4 rounded-xl border theme-surface-glass">
+                      <div className="text-xs text-slate-500 dark:text-slate-400">Configured tenants</div>
+                      <div className="mt-1 text-2xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white">
+                        {displayCount(overview?.total ?? registeredTenants)}
+                      </div>
+                    </div>
+                    <div className="p-4 rounded-xl border theme-surface-glass">
+                      <div className="text-xs text-slate-500 dark:text-slate-400">Requests today</div>
+                      <div className="mt-1 text-2xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white">
+                        {displayCount(totalRequests)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <TenantTable
+                    tenants={overview?.tenants ?? []}
+                    usageByTenant={usageByTenant}
+                    emptyMessage="No tenant records were returned."
+                  />
                 </>
-              ) : data?.scope === 'tenant' ? (
-                <>
-                  <section className="admin-metric-grid admin-metric-grid--tenant"><article className="admin-metric-card"><span>PLAN</span><strong>{data.tenant?.billing_tier || '—'}</strong><small>Assigned tenant plan</small></article><article className="admin-metric-card"><span>REQUESTS TODAY</span><strong>{displayCount(data.usage?.requests_today)}</strong><small>UTC daily total</small></article><article className="admin-metric-card"><span>TOKENS TODAY</span><strong>{displayCount(data.usage?.tokens_today)}</strong><small>UTC daily total</small></article><article className="admin-metric-card"><span>COST TODAY</span><strong>{displayCost(data.usage?.cost_today)}</strong><small>Recorded usage</small></article></section>
-                  <section className="admin-section"><div className="admin-section-heading"><div><span className="admin-eyebrow">WORKSPACE DETAILS</span><h2>{data.tenant?.org_name || 'Tenant workspace'}</h2></div><span className="admin-status admin-status--neutral"><i />assignment verified by server</span></div><div className="admin-detail-grid"><div><span>Request limit</span><strong>{displayCount(data.tenant?.requests_per_minute)} / minute</strong></div><div><span>Daily token limit</span><strong>{displayCount(data.tenant?.max_tokens_per_day)}</strong></div><div><span>Concurrent sessions</span><strong>{displayCount(data.tenant?.max_concurrent_sessions)}</strong></div></div><p className="admin-form-footnote">This view is scoped to the tenant assignment in your server-managed account. The desktop client cannot change or select that assignment.</p></section>
-                </>
-              ) : (
-                <div className="admin-empty-state"><strong>Dashboard data is not loaded.</strong><p>Use Refresh to try again or sign in again.</p><button className="admin-button admin-button--primary" onClick={() => void refreshDashboard()} disabled={loadingData}>{loadingData ? 'Refreshing…' : 'Load dashboard'}</button></div>
+              )}
+
+              {activeView === 'services' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  {healthEntries.map(([name, item]) => {
+                    const meta = statusMeta(item.status);
+                    return (
+                      <article
+                        key={name}
+                        className="p-4 rounded-xl border theme-surface-glass space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-semibold text-slate-900 dark:text-white">
+                            {prettify(name)}
+                          </span>
+                          <span className={`text-xs font-semibold ${meta.cls}`}>{meta.label}</span>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+                          {[
+                            item.provider,
+                            item.region,
+                            item.latency_ms != null ? `${item.latency_ms} ms` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ') || 'No additional telemetry reported'}
+                        </p>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+
+              {activeView === 'tenants' && (
+                <div className="space-y-3">
+                  <label className="flex items-center gap-2 px-3 py-2 rounded-xl border theme-input-surface text-slate-500 max-w-sm">
+                    <Search className="w-4 h-4" />
+                    <input
+                      type="search"
+                      value={tenantSearch}
+                      onChange={(e) => setTenantSearch(e.target.value)}
+                      placeholder="Search organization, tenant ID, or plan"
+                      className="w-full bg-transparent border-0 outline-none text-xs text-slate-900 dark:text-slate-100"
+                    />
+                  </label>
+                  <TenantTable
+                    tenants={filteredTenants}
+                    usageByTenant={usageByTenant}
+                    emptyMessage={
+                      tenantSearch ? 'No tenants match this search.' : 'No tenant records returned.'
+                    }
+                  />
+                </div>
               )}
             </main>
           </div>

@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { synthesizeSpeechAudio } from '../bridge/desktopBridge';
 import {
   type BanglaAccent,
   type VoicePersona,
@@ -202,7 +202,7 @@ class TtsController {
 
   private async playRemote(text: string, voice: string, generation: number): Promise<boolean> {
     try {
-      const audio = await invoke<SpeechAudio>('synthesize_speech', { text, voice });
+      const audio = await synthesizeSpeechAudio(text, voice);
       if (generation !== this.generation || !audio?.audioBase64) return false;
       return await this.playBase64(audio.audioBase64, audio.mimeType, generation);
     } catch {
