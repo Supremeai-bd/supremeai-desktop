@@ -1,13 +1,14 @@
 use futures_util::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const MAX_BINARY_BYTES: u64 = 350 * 1024 * 1024;
 const MIN_BINARY_BYTES: u64 = 100 * 1024;
+const PENDING_UPDATE_FILE: &str = "pending_update.json";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,13 +20,26 @@ pub struct AppRuntimeInfo {
     pub is_android: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingUpdateRecord {
+    pub version: String,
+    pub tag: String,
+    pub file_path: String,
+    pub file_name: String,
+    pub url: String,
+    pub staged_at: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedUpdateInfo {
     pub file_path: String,
     pub file_name: String,
+    pub version: String,
     pub size_bytes: u64,
     pub already_cached: bool,
+    pub pending_on_next_startup: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -35,6 +49,26 @@ pub struct ApplyUpdateResult {
     pub silent: bool,
     pub mode: String,
     pub message: String,
+}
+
+pub fn parse_semver(raw: &str) -> (u64, u64, u64) {
+    let cleaned = raw
+        .trim()
+        .trim_start_matches('v')
+        .trim_start_matches('V')
+        .split('-')
+        .next()
+        .unwrap_or("0.0.0");
+    let mut parts = cleaned.split('.').map(|part| part.parse::<u64>().unwrap_or(0));
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
+}
+
+pub fn semver_gt(candidate: &str, current: &str) -> bool {
+    parse_semver(candidate) > parse_semver(current)
 }
 
 pub fn is_allowed_release_url(url: &str) -> bool {
@@ -94,6 +128,44 @@ fn updates_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn pending_manifest_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(updates_dir(app)?.join(PENDING_UPDATE_FILE))
+}
+
+fn persist_pending_record(app: &AppHandle, record: &PendingUpdateRecord) {
+    if let Ok(path) = pending_manifest_path(app) {
+        if let Ok(bytes) = serde_json::to_vec_pretty(record) {
+            let _ = fs::write(path, bytes);
+        }
+    }
+}
+
+fn read_pending_record(app: &AppHandle) -> Option<PendingUpdateRecord> {
+    let path = pending_manifest_path(app).ok()?;
+    let bytes = fs::read(&path).ok()?;
+    serde_json::from_slice::<PendingUpdateRecord>(&bytes).ok()
+}
+
+fn now_epoch_string() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+fn extract_version_hint(file_name: &str, fallback: &str) -> String {
+    if let Some(idx) = file_name.find('_') {
+        let rest = &file_name[idx + 1..];
+        if let Some(end) = rest.find('_') {
+            let candidate = rest[..end].trim();
+            if !candidate.is_empty() && candidate.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                return candidate.to_string();
+            }
+        }
+    }
+    fallback.trim().trim_start_matches(['v', 'V']).to_string()
+}
+
 #[tauri::command]
 pub fn get_app_runtime_info(app: AppHandle) -> AppRuntimeInfo {
     AppRuntimeInfo {
@@ -106,15 +178,162 @@ pub fn get_app_runtime_info(app: AppHandle) -> AppRuntimeInfo {
 }
 
 #[tauri::command]
+pub fn get_pending_update(app: AppHandle) -> Option<PendingUpdateRecord> {
+    let dir = updates_dir(&app).ok()?;
+    let record = read_pending_record(&app)?;
+    let current_version = app.package_info().version.to_string();
+
+    if !semver_gt(&record.version, &current_version)
+        || !is_path_inside_updates_dir(&dir, &PathBuf::from(&record.file_path))
+    {
+        let _ = clear_pending_update_files(&app, Some(&record.file_path));
+        return None;
+    }
+
+    Some(record)
+}
+
+#[tauri::command]
+pub fn clear_pending_update(app: AppHandle) {
+    let existing = read_pending_record(&app);
+    let _ = clear_pending_update_files(
+        &app,
+        existing.as_ref().map(|record| record.file_path.as_str()),
+    );
+}
+
+fn clear_pending_update_files(app: &AppHandle, staged_file: Option<&str>) -> Result<(), String> {
+    let dir = updates_dir(app)?;
+    let manifest_path = dir.join(PENDING_UPDATE_FILE);
+    if manifest_path.exists() {
+        let _ = fs::remove_file(&manifest_path);
+    }
+    if let Some(file_str) = staged_file {
+        let candidate = PathBuf::from(file_str);
+        if is_path_inside_updates_dir(&dir, &candidate) {
+            let _ = fs::remove_file(candidate);
+        }
+    }
+    Ok(())
+}
+
+/// Checks if a validated newer installer was downloaded in an earlier session.
+/// On Windows, launches silent NSIS `/S` update + relaunches the updated app before exit.
+pub fn apply_pending_update_on_startup(app: &AppHandle) -> bool {
+    let Ok(dir) = updates_dir(app) else {
+        return false;
+    };
+    let Some(record) = read_pending_record(app) else {
+        return false;
+    };
+
+    let current_version = app.package_info().version.to_string();
+    if !semver_gt(&record.version, &current_version) {
+        let _ = clear_pending_update_files(app, Some(&record.file_path));
+        return false;
+    }
+
+    let candidate = PathBuf::from(&record.file_path);
+    if !is_path_inside_updates_dir(&dir, &candidate) {
+        let _ = clear_pending_update_files(app, None);
+        return false;
+    }
+
+    let mut header = [0u8; 4];
+    let valid_magic = fs::File::open(&candidate)
+        .and_then(|mut f| f.read(&mut header))
+        .is_ok_and(|n| has_valid_binary_header(&record.file_name, &header[..n]));
+    if !valid_magic {
+        let _ = clear_pending_update_files(app, Some(&record.file_path));
+        return false;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Clear pending manifest before launching to guarantee no boot loop if interrupted
+        if let Ok(manifest_path) = pending_manifest_path(app) {
+            let _ = fs::remove_file(manifest_path);
+        }
+
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        let path_str = candidate.to_string_lossy().to_string();
+        let lower = path_str.to_ascii_lowercase();
+        let escaped_installer = path_str.replace('\'', "''");
+        let current_exe_relaunch = std::env::current_exe()
+            .ok()
+            .map(|exe| exe.to_string_lossy().to_string().replace('\'', "''"))
+            .unwrap_or_default();
+
+        let relaunch_stmt = if !current_exe_relaunch.is_empty() {
+            format!("; if (Test-Path '{current_exe_relaunch}') {{ Start-Process -FilePath '{current_exe_relaunch}' }}")
+        } else {
+            String::new()
+        };
+
+        let ps_script = if lower.ends_with(".exe") {
+            format!(
+                "Start-Sleep -Milliseconds 450; Start-Process -FilePath '{escaped_installer}' -ArgumentList '/S' -Wait{relaunch_stmt}"
+            )
+        } else if lower.ends_with(".msi") {
+            format!(
+                "Start-Sleep -Milliseconds 450; Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i','{escaped_installer}','/qn','/norestart' -Wait{relaunch_stmt}"
+            )
+        } else {
+            return false;
+        };
+
+        if std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                &ps_script,
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .is_ok()
+        {
+            return true;
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Android / Linux / macOS keep pending_update.json intact so frontend/Android handler can trigger on launch
+        let _ = candidate;
+    }
+
+    false
+}
+
+#[tauri::command]
 pub async fn stage_silent_update(
     app: AppHandle,
     url: String,
     file_name: String,
+    version: Option<String>,
+    tag: Option<String>,
 ) -> Result<StagedUpdateInfo, String> {
     if !is_allowed_release_url(&url) {
         return Err("Update URL is not in the allowlisted SupremeAI release origin.".to_string());
     }
     let clean_name = sanitize_file_name(&file_name)?;
+    let resolved_version = version
+        .as_deref()
+        .map(|v| v.trim().trim_start_matches(['v', 'V']).to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| extract_version_hint(&clean_name, &app.package_info().version.to_string()));
+    let resolved_tag = tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+
     let dir = updates_dir(&app)?;
     let final_path = dir.join(&clean_name);
 
@@ -124,11 +343,25 @@ pub async fn stage_silent_update(
                 let mut header = [0u8; 4];
                 if let Ok(n) = f.read(&mut header) {
                     if has_valid_binary_header(&clean_name, &header[..n]) {
+                        let path_str = final_path.to_string_lossy().to_string();
+                        persist_pending_record(
+                            &app,
+                            &PendingUpdateRecord {
+                                version: resolved_version.clone(),
+                                tag: resolved_tag,
+                                file_path: path_str.clone(),
+                                file_name: clean_name.clone(),
+                                url: url.trim().to_string(),
+                                staged_at: now_epoch_string(),
+                            },
+                        );
                         return Ok(StagedUpdateInfo {
-                            file_path: final_path.to_string_lossy().to_string(),
+                            file_path: path_str,
                             file_name: clean_name,
+                            version: resolved_version,
                             size_bytes: meta.len(),
                             already_cached: true,
+                            pending_on_next_startup: true,
                         });
                     }
                 }
@@ -212,11 +445,26 @@ pub async fn stage_silent_update(
     fs::rename(&part_path, &final_path)
         .map_err(|err| format!("Failed to finalize staged installer: {err}"))?;
 
+    let path_str = final_path.to_string_lossy().to_string();
+    persist_pending_record(
+        &app,
+        &PendingUpdateRecord {
+            version: resolved_version.clone(),
+            tag: resolved_tag,
+            file_path: path_str.clone(),
+            file_name: clean_name.clone(),
+            url: url.trim().to_string(),
+            staged_at: now_epoch_string(),
+        },
+    );
+
     Ok(StagedUpdateInfo {
-        file_path: final_path.to_string_lossy().to_string(),
+        file_path: path_str,
         file_name: clean_name,
+        version: resolved_version,
         size_bytes: total_bytes,
         already_cached: false,
+        pending_on_next_startup: true,
     })
 }
 
@@ -233,20 +481,33 @@ pub async fn apply_staged_update(
 
     #[cfg(target_os = "windows")]
     {
+        if let Ok(manifest_path) = pending_manifest_path(&app) {
+            let _ = fs::remove_file(manifest_path);
+        }
+
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
         let path_str = candidate.to_string_lossy().to_string();
         let lower = path_str.to_ascii_lowercase();
         let escaped_ps_path = path_str.replace('\'', "''");
+        let current_exe_relaunch = std::env::current_exe()
+            .ok()
+            .map(|exe| exe.to_string_lossy().to_string().replace('\'', "''"))
+            .unwrap_or_default();
+        let relaunch_stmt = if !current_exe_relaunch.is_empty() {
+            format!("; if (Test-Path '{current_exe_relaunch}') {{ Start-Process -FilePath '{current_exe_relaunch}' }}")
+        } else {
+            String::new()
+        };
 
         let ps_script = if lower.ends_with(".exe") {
             format!(
-                "Start-Sleep -Milliseconds 650; Start-Process -FilePath '{escaped_ps_path}' -ArgumentList '/S'"
+                "Start-Sleep -Milliseconds 650; Start-Process -FilePath '{escaped_ps_path}' -ArgumentList '/S' -Wait{relaunch_stmt}"
             )
         } else if lower.ends_with(".msi") {
             format!(
-                "Start-Sleep -Milliseconds 650; Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i','{escaped_ps_path}','/qn','/norestart'"
+                "Start-Sleep -Milliseconds 650; Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i','{escaped_ps_path}','/qn','/norestart' -Wait{relaunch_stmt}"
             )
         } else {
             return Err("Unsupported Windows update package type.".to_string());
@@ -275,7 +536,7 @@ pub async fn apply_staged_update(
             launched: true,
             silent: true,
             mode: "nsis-silent".to_string(),
-            message: "Applying cached silent update now. SupremeAI Desktop will finish updating in seconds.".to_string(),
+            message: "Applying cached silent update now. SupremeAI Desktop will relaunch automatically.".to_string(),
         });
     }
 
@@ -291,14 +552,14 @@ pub async fn apply_staged_update(
             launched: false,
             silent: false,
             mode: mode.to_string(),
-            message: "Update package verified. Android OS requires one confirmation tap on the APK installer prompt.".to_string(),
+            message: "Update package downloaded on device. Tap install to complete Android APK update.".to_string(),
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{has_valid_binary_header, is_allowed_release_url, sanitize_file_name};
+    use super::{has_valid_binary_header, is_allowed_release_url, sanitize_file_name, semver_gt};
 
     #[test]
     fn allowlists_only_supremeai_origins() {
@@ -327,5 +588,13 @@ mod tests {
         assert!(!has_valid_binary_header("setup.exe", b"<htm"));
         assert!(has_valid_binary_header("app.apk", b"PK\x03\x04"));
         assert!(!has_valid_binary_header("app.apk", b"<!DO"));
+    }
+
+    #[test]
+    fn compares_semver_versions_accurately() {
+        assert!(semver_gt("2.5.1", "2.5.0"));
+        assert!(semver_gt("v2.6.0", "2.5.9"));
+        assert!(!semver_gt("2.5.0", "2.5.0"));
+        assert!(!semver_gt("2.4.9", "2.5.0"));
     }
 }

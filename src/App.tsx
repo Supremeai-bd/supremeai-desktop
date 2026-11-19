@@ -215,6 +215,7 @@ import { useControlCenterStore } from './stores/useControlCenterStore';
 import { useTabRouter } from './hooks/useTabRouter';
 import { useMcpTelemetry } from './hooks/useMcpTelemetry';
 import { useFederationBootstrap } from './hooks/useFederationSync';
+import { useAutoUpdater } from './hooks/useAutoUpdater';
 import { SyncStatusPill } from './components/sync/SyncStatusPill';
 import { useOsThemeSync } from './hooks/useOsThemeSync';
 import { LiveScreenBackdrop } from './components/theme/LiveScreenBackdrop';
@@ -290,6 +291,7 @@ const SUBVIEW_TITLES: Record<string, string> = {
 export default function App() {
   useOsThemeSync();
   useFederationBootstrap();
+  useAutoUpdater();
 
   // Cross-device Real-Time Sync (Web <-> Desktop Tauri <-> Android)
   useEffect(() => {

@@ -17,13 +17,9 @@ import {
   type ReleaseManifest,
 } from '../../config/releaseDownloads';
 import {
-  applyReadyUpdate,
-  checkAndStageBackgroundUpdate,
   fetchRemoteReleaseManifest,
-  getUpdateState,
-  subscribeUpdateState,
-  type AutoUpdateState,
 } from '../../services/appAutoUpdater';
+import { useAutoUpdater } from '../../hooks/useAutoUpdater';
 
 let sharedManifestCache: ReleaseManifest | null = null;
 let sharedManifestPromise: Promise<ReleaseManifest> | null = null;
@@ -69,19 +65,15 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
     sharedManifestCache || DEFAULT_RELEASE_MANIFEST
   );
   const [runtimeTarget] = useState<RuntimeTarget>(() => detectRuntimeTarget());
-  const [updateState, setUpdateState] = useState<AutoUpdateState>(() => getUpdateState());
+  const updateState = useAutoUpdater({ autoStart: false });
 
   useEffect(() => {
     let active = true;
     void loadLatestReleaseManifest().then((resolved) => {
       if (active) setManifest(resolved);
     });
-    const unsubscribe = subscribeUpdateState((next) => {
-      if (active) setUpdateState(next);
-    });
     return () => {
       active = false;
-      unsubscribe();
     };
   }, []);
 
@@ -160,14 +152,18 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
         {updateState.status === 'ready' && updateState.latestVersion && (
           <button
             type="button"
-            onClick={() => void applyReadyUpdate()}
+            onClick={() => void updateState.applyUpdate()}
             className="w-full flex items-center justify-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 transition-colors"
-            title={updateState.message || 'Apply cached background update'}
+            title={updateState.message || 'Apply cached update'}
           >
             <RefreshCw className="w-3 h-3" />
             <span>
-              v{updateState.latestVersion} Ready ·{' '}
-              {updateState.silentSupported ? 'Silent Update' : 'Install APK'}
+              v{updateState.latestVersion} Staged ·{' '}
+              {updateState.silentSupported
+                ? 'Restart & Update'
+                : updateState.runtimeTarget === 'android'
+                  ? 'Install APK'
+                  : 'Reload App'}
             </span>
           </button>
         )}
@@ -194,7 +190,7 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
           {updateState.status === 'ready' && updateState.latestVersion ? (
             <button
               type="button"
-              onClick={() => void applyReadyUpdate()}
+              onClick={() => void updateState.applyUpdate()}
               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 font-semibold whitespace-nowrap transition-colors"
             >
               <RefreshCw className="w-3 h-3" />
@@ -205,7 +201,7 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
           ) : (
             <button
               type="button"
-              onClick={() => void checkAndStageBackgroundUpdate(true)}
+              onClick={() => void updateState.checkNow()}
               disabled={updateState.status === 'checking' || updateState.status === 'staging'}
               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium whitespace-nowrap disabled:opacity-60"
             >

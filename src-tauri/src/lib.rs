@@ -17,7 +17,10 @@ use auth::{
 };
 use feedback::submit_feedback;
 use speech::synthesize_speech;
-use updater::{apply_staged_update, get_app_runtime_info, stage_silent_update};
+use updater::{
+    apply_pending_update_on_startup, apply_staged_update, clear_pending_update,
+    get_app_runtime_info, get_pending_update, stage_silent_update,
+};
 
 const DEFAULT_GATEWAY: &str = "https://supremeai-api-ulw0.onrender.com";
 const MAX_PROMPT_BYTES: usize = 80_000;
@@ -247,6 +250,9 @@ pub fn run() {
         .manage(AdminSessionState::default())
         .manage(UserSessionState::default())
         .setup(|app| {
+            if apply_pending_update_on_startup(app.handle()) {
+                std::process::exit(0);
+            }
             admin::load_persisted_session(app.handle(), &app.state::<AdminSessionState>());
             auth::load_persisted_user_session(app.handle(), &app.state::<UserSessionState>());
             Ok(())
@@ -266,6 +272,8 @@ pub fn run() {
             submit_feedback,
             synthesize_speech,
             get_app_runtime_info,
+            get_pending_update,
+            clear_pending_update,
             stage_silent_update,
             apply_staged_update
         ])

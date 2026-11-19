@@ -35,4 +35,24 @@ const vscodePkg = JSON.parse(readFileSync(vscodePkgPath, 'utf8'));
 vscodePkg.version = version;
 writeFileSync(vscodePkgPath, `${JSON.stringify(vscodePkg, null, 2)}\n`);
 
-console.log(`Synchronized Web, Desktop, Android APK, and VS Code VSIX to version ${version}`);
+// 4. Canonical repo version.json
+const versionJsonPath = path.join(root, 'version.json');
+let versionJson = {
+  version,
+  tag: 'latest',
+  releaseTag: `v${version}`,
+  repo: 'Supremeai-bd/supremeai-public',
+};
+try {
+  const existing = JSON.parse(readFileSync(versionJsonPath, 'utf8'));
+  versionJson = {
+    ...existing,
+    version,
+    releaseTag: `v${version}`,
+  };
+} catch {
+  // Use defaults
+}
+writeFileSync(versionJsonPath, `${JSON.stringify(versionJson, null, 2)}\n`);
+
+console.log(`Synchronized Web, Desktop, Android APK, VS Code VSIX, and version.json to version ${version}`);
