@@ -347,7 +347,7 @@ export async function GET(request: NextRequest) {
       .from(adminAuditEvents)
       .orderBy(desc(adminAuditEvents.createdAt))
       .limit(24);
-    auditLog = rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
+    auditLog = (rows as any[]).map((row: any) => ({ ...row, createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : new Date().toISOString() }));
   } catch {
     auditStorageAvailable = false;
   }
