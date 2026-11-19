@@ -44,17 +44,26 @@ const androidFiles = existsSync(androidDir)
 
 const normalizedApks = androidFiles.map((file) => normalizeAndRename(androidDir, file));
 const arm64Apk =
-  normalizedApks.find((name) => /arm64|aarch64/i.test(name)) || normalizedApks[0] || null;
+  normalizedApks.find((name) => /universal|arm64|aarch64/i.test(name)) || normalizedApks[0] || null;
 const armv7Apk =
   normalizedApks.find((name) => /armv7|armeabi/i.test(name)) || null;
 
 const androidApkUrl = arm64Apk ? downloadUrlFor(arm64Apk) : undefined;
 const androidArmv7ApkUrl = armv7Apk ? downloadUrlFor(armv7Apk) : undefined;
 
+const vsixDir = 'release-artifacts/release-vscode-vsix';
+const vsixFiles = existsSync(vsixDir)
+  ? readdirSync(vsixDir, { recursive: true })
+      .map(String)
+      .filter((file) => file.endsWith('.vsix'))
+  : [];
+const vsixAsset = vsixFiles.length > 0 ? normalizeAndRename(vsixDir, vsixFiles[0]) : null;
+const vscodeVsixUrl = vsixAsset ? downloadUrlFor(vsixAsset) : undefined;
+
 const webUrl = (WEB_STUDIO_URL || 'https://supremeai-studio.pages.dev').replace(/\/+$/, '');
 const releasePageUrl =
   RELEASE_TAG === 'latest'
-    ? `https://github.com/${GITHUB_REPOSITORY}/releases/latest`
+    ? `https://github.com/${GITHUB_REPOSITORY}/releases/tag/latest`
     : `https://github.com/${GITHUB_REPOSITORY}/releases/tag/${encodeURIComponent(RELEASE_TAG)}`;
 
 const platforms = {
@@ -69,13 +78,14 @@ const platforms = {
       }
     : {}),
   ...(androidArmv7ApkUrl ? { 'android-armv7': { url: androidArmv7ApkUrl } } : {}),
+  ...(vscodeVsixUrl ? { 'vscode-vsix': { url: vscodeVsixUrl } } : {}),
 };
 
 const manifest = {
   version,
   tag: RELEASE_TAG,
   repo: GITHUB_REPOSITORY,
-  notes: 'SupremeAI Studio Unified Monorepo release (Web + Desktop + Android)',
+  notes: 'SupremeAI Studio Unified Release (Web + Desktop + Android + VS Code VSIX)',
   pub_date: new Date().toISOString(),
   downloads: {
     webUrl,
@@ -84,6 +94,7 @@ const manifest = {
     ...(windowsMsiUrl ? { windowsMsiUrl } : {}),
     ...(androidApkUrl ? { androidApkUrl } : {}),
     ...(androidArmv7ApkUrl ? { androidArmv7ApkUrl } : {}),
+    ...(vscodeVsixUrl ? { vscodeVsixUrl } : {}),
   },
   platforms,
 };

@@ -174,3 +174,27 @@ jobs:
           fi
           chmod +x src-tauri/gen/android/gradlew 2>/dev/null || true
           npm run tauri -- android build --apk --debug --target aarch64 --ci
+
+  vscode-extension:
+    name: "VS Code Extension (TypeScript + VSIX Tests)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Compile & Test packages/vscode-extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages/vscode-extension
+          npm install --no-audit --no-fund
+          npm run compile
+          npm test
+

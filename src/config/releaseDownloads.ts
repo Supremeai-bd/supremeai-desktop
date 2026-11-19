@@ -6,7 +6,13 @@ import {
 } from './platformEndpoints';
 
 export interface ReleaseAssetEntry {
-  platform: 'web' | 'windows-exe' | 'windows-msi' | 'android-apk-arm64' | 'android-apk-armv7';
+  platform:
+    | 'web'
+    | 'windows-exe'
+    | 'windows-msi'
+    | 'android-apk-arm64'
+    | 'android-apk-armv7'
+    | 'vscode-vsix';
   label: string;
   fileName: string;
   url: string;
@@ -24,13 +30,14 @@ export interface ReleaseManifest {
   windowsMsiUrl?: string;
   androidApkUrl: string;
   androidArmv7ApkUrl?: string;
+  vscodeVsixUrl?: string;
   provenance: 'live-github' | 'manifest' | 'fallback';
   assets: ReleaseAssetEntry[];
 }
 
 export interface DownloadShortcut {
-  id: 'web' | 'android-apk' | 'windows-exe' | 'release-page';
-  targetPlatform: 'web' | 'android' | 'windows' | 'releases';
+  id: 'web' | 'android-apk' | 'windows-exe' | 'vscode-vsix' | 'release-page';
+  targetPlatform: 'web' | 'android' | 'windows' | 'vscode' | 'releases';
   label: string;
   badge: string;
   description: string;
@@ -38,56 +45,190 @@ export interface DownloadShortcut {
   isDirectDownload: boolean;
 }
 
-const PUBLIC_RELEASES_BASE = `https://github.com/${GITHUB_PUBLIC_REPO_SLUG}/releases`;
 const MONOREPO_RELEASES_BASE = `https://github.com/${GITHUB_MONOREPO_SLUG}/releases`;
+
+export function buildRollingAssetUrls(
+  version: string,
+  repoSlug: string = GITHUB_PUBLIC_REPO_SLUG,
+  tag: string = 'latest'
+) {
+  const cleanVersion = version.replace(/^v/i, '').trim() || '2.5.0';
+  const base = `https://github.com/${repoSlug}/releases`;
+  const downloadBase = `${base}/download/${encodeURIComponent(tag)}`;
+  return {
+    releasePageUrl: `${base}/tag/${encodeURIComponent(tag)}`,
+    windowsExeUrl: `${downloadBase}/SupremeAI.Desktop_${cleanVersion}_x64-setup.exe`,
+    windowsMsiUrl: `${downloadBase}/SupremeAI.Desktop_${cleanVersion}_x64_en-US.msi`,
+    androidApkUrl: `${downloadBase}/SupremeAI-Studio-app-universal-release.apk`,
+    vscodeVsixUrl: `${downloadBase}/supremeai-vscode-${cleanVersion}.vsix`,
+  };
+}
+
+const DEFAULT_URLS = buildRollingAssetUrls('2.5.0', GITHUB_PUBLIC_REPO_SLUG, 'latest');
 
 export const DEFAULT_RELEASE_MANIFEST: ReleaseManifest = {
   version: '2.5.0',
   tag: 'latest',
   repo: GITHUB_PUBLIC_REPO_SLUG,
   publishedAt: '',
-  releasePageUrl: `${PUBLIC_RELEASES_BASE}/latest`,
+  releasePageUrl: DEFAULT_URLS.releasePageUrl,
   webUrl: DEFAULT_WEB_STUDIO_URL,
-  windowsExeUrl: `${PUBLIC_RELEASES_BASE}/latest/download/SupremeAI-Studio_2.5.0_x64-setup.exe`,
-  windowsMsiUrl: `${PUBLIC_RELEASES_BASE}/latest/download/SupremeAI-Studio_2.5.0_x64_en-US.msi`,
-  androidApkUrl: `${PUBLIC_RELEASES_BASE}/latest/download/SupremeAI-Studio-arm64-release.apk`,
-  androidArmv7ApkUrl: `${PUBLIC_RELEASES_BASE}/latest/download/SupremeAI-Studio-armv7-release.apk`,
+  windowsExeUrl: DEFAULT_URLS.windowsExeUrl,
+  windowsMsiUrl: DEFAULT_URLS.windowsMsiUrl,
+  androidApkUrl: DEFAULT_URLS.androidApkUrl,
+  vscodeVsixUrl: DEFAULT_URLS.vscodeVsixUrl,
   provenance: 'fallback',
   assets: [
     {
       platform: 'android-apk-arm64',
-      label: 'Android APK (ARM64)',
-      fileName: 'SupremeAI-Studio-arm64-release.apk',
-      url: `${PUBLIC_RELEASES_BASE}/latest/download/SupremeAI-Studio-arm64-release.apk`,
-    },
-    {
-      platform: 'android-apk-armv7',
-      label: 'Android APK (ARMv7)',
-      fileName: 'SupremeAI-Studio-armv7-release.apk',
-      url: `${PUBLIC_RELEASES_BASE}/latest/download/SupremeAI-Studio-armv7-release.apk`,
+      label: 'Android APK (Universal)',
+      fileName: 'SupremeAI-Studio-app-universal-release.apk',
+      url: DEFAULT_URLS.androidApkUrl,
     },
     {
       platform: 'windows-exe',
       label: 'Windows Installer (.exe)',
-      fileName: 'SupremeAI-Studio_2.5.0_x64-setup.exe',
-      url: `${PUBLIC_RELEASES_BASE}/latest/download/SupremeAI-Studio_2.5.0_x64-setup.exe`,
+      fileName: 'SupremeAI.Desktop_2.5.0_x64-setup.exe',
+      url: DEFAULT_URLS.windowsExeUrl,
     },
     {
       platform: 'windows-msi',
       label: 'Windows MSI (.msi)',
-      fileName: 'SupremeAI-Studio_2.5.0_x64_en-US.msi',
-      url: `${PUBLIC_RELEASES_BASE}/latest/download/SupremeAI-Studio_2.5.0_x64_en-US.msi`,
+      fileName: 'SupremeAI.Desktop_2.5.0_x64_en-US.msi',
+      url: DEFAULT_URLS.windowsMsiUrl,
+    },
+    {
+      platform: 'vscode-vsix',
+      label: 'VS Code Extension (.vsix)',
+      fileName: 'supremeai-vscode-2.5.0.vsix',
+      url: DEFAULT_URLS.vscodeVsixUrl,
     },
   ],
 };
 
-export const ALTERNATE_MONOREPO_RELEASES_URL = `${MONOREPO_RELEASES_BASE}/latest`;
+export const ALTERNATE_MONOREPO_RELEASES_URL = `${MONOREPO_RELEASES_BASE}/tag/latest`;
 
 /**
- * Returns the exact cross-platform shortcut links requested for each runtime:
- *  - Web: Android (.apk) + Windows (.exe)
- *  - Android APK: Web URL + Windows (.exe)
- *  - Desktop EXE: Web URL + Android (.apk)
+ * Compares two semver strings (e.g. "2.5.1" vs "2.5.0").
+ * Returns > 0 if a > b, < 0 if a < b, 0 if equal.
+ */
+export function compareSemver(a: string, b: string): number {
+  const parse = (value: string): [number, number, number] => {
+    const cleaned = value.trim().replace(/^v/i, '').split('-')[0] || '0.0.0';
+    const [major = 0, minor = 0, patch = 0] = cleaned
+      .split('.')
+      .map((part) => Number.parseInt(part, 10) || 0);
+    return [major, minor, patch];
+  };
+  const [ma, mia, pa] = parse(a);
+  const [mb, mib, pb] = parse(b);
+  if (ma !== mb) return ma - mb;
+  if (mia !== mib) return mia - mib;
+  return pa - pb;
+}
+
+/**
+ * Normalizes a fetched latest-release.json / latest-desktop.json payload,
+ * ensuring APK, EXE, and VSIX URLs always resolve cleanly to valid rolling assets
+ * even when an older manifest only declared Windows URLs.
+ */
+export function normalizeRemoteReleaseManifest(
+  raw: unknown,
+  repoSlug: string = GITHUB_PUBLIC_REPO_SLUG
+): ReleaseManifest | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const mf = raw as Record<string, any>;
+  if (!mf.version) return null;
+
+  const version = String(mf.version).replace(/^v/i, '').trim() || DEFAULT_RELEASE_MANIFEST.version;
+  const tag = String(mf.tag || 'latest').trim() || 'latest';
+  const resolvedRepo = String(mf.repo || repoSlug || GITHUB_PUBLIC_REPO_SLUG).trim();
+  const rollingUrls = buildRollingAssetUrls(version, resolvedRepo, tag);
+
+  const downloads = (mf.downloads && typeof mf.downloads === 'object' ? mf.downloads : {}) as Record<
+    string,
+    any
+  >;
+  const platforms = (mf.platforms && typeof mf.platforms === 'object' ? mf.platforms : {}) as Record<
+    string,
+    any
+  >;
+
+  const windowsExeUrl = String(
+    downloads.windowsExeUrl || platforms['windows-x86_64']?.url || rollingUrls.windowsExeUrl
+  );
+  const windowsMsiUrl = String(
+    downloads.windowsMsiUrl || platforms['windows-msi']?.url || rollingUrls.windowsMsiUrl
+  );
+  const androidApkUrl = String(
+    downloads.androidApkUrl ||
+      platforms['android-arm64']?.url ||
+      platforms['android-apk']?.url ||
+      rollingUrls.androidApkUrl
+  );
+  const androidArmv7ApkUrl = downloads.androidArmv7ApkUrl
+    ? String(downloads.androidArmv7ApkUrl)
+    : platforms['android-armv7']?.url
+      ? String(platforms['android-armv7'].url)
+      : undefined;
+  const vscodeVsixUrl = String(
+    downloads.vscodeVsixUrl || platforms['vscode-vsix']?.url || rollingUrls.vscodeVsixUrl
+  );
+
+  const rawReleasePageUrl = String(downloads.releasePageUrl || '');
+  const releasePageUrl =
+    rawReleasePageUrl && !/\/releases\/latest\/?$/i.test(rawReleasePageUrl)
+      ? rawReleasePageUrl
+      : rollingUrls.releasePageUrl;
+
+  return {
+    version,
+    tag,
+    repo: resolvedRepo,
+    publishedAt: String(mf.pub_date || ''),
+    releasePageUrl,
+    webUrl: String(downloads.webUrl || DEFAULT_WEB_STUDIO_URL),
+    windowsExeUrl,
+    windowsMsiUrl,
+    androidApkUrl,
+    ...(androidArmv7ApkUrl ? { androidArmv7ApkUrl } : {}),
+    vscodeVsixUrl,
+    provenance: 'manifest',
+    assets: [
+      {
+        platform: 'android-apk-arm64',
+        label: 'Android APK (Universal)',
+        fileName: androidApkUrl.split('/').pop() || 'SupremeAI-Studio-app-universal-release.apk',
+        url: androidApkUrl,
+      },
+      {
+        platform: 'windows-exe',
+        label: 'Windows Installer (.exe)',
+        fileName: windowsExeUrl.split('/').pop() || `SupremeAI.Desktop_${version}_x64-setup.exe`,
+        url: windowsExeUrl,
+      },
+      {
+        platform: 'windows-msi',
+        label: 'Windows MSI (.msi)',
+        fileName: windowsMsiUrl.split('/').pop() || `SupremeAI.Desktop_${version}_x64_en-US.msi`,
+        url: windowsMsiUrl,
+      },
+      {
+        platform: 'vscode-vsix',
+        label: 'VS Code Extension (.vsix)',
+        fileName: vscodeVsixUrl.split('/').pop() || `supremeai-vscode-${version}.vsix`,
+        url: vscodeVsixUrl,
+      },
+    ],
+  };
+}
+
+/**
+ * Returns cross-platform shortcut links tailored for each runtime:
+ *  - Web: Android (.apk) + Windows (.exe) + VS Code (.vsix)
+ *  - Android APK: Web URL + Windows (.exe) + VS Code (.vsix)
+ *  - Desktop EXE: Web URL + Android (.apk) + VS Code (.vsix)
+ *  - Extension: Web URL + Android (.apk) + Windows (.exe)
  */
 export function buildCounterpartShortcuts(
   runtimeTarget: RuntimeTarget,
@@ -108,7 +249,7 @@ export function buildCounterpartShortcuts(
     targetPlatform: 'android',
     label: 'Android APK',
     badge: '.APK',
-    description: `v${manifest.version} · ARM64 signed`,
+    description: `v${manifest.version} · Universal APK`,
     url: manifest.androidApkUrl || DEFAULT_RELEASE_MANIFEST.androidApkUrl,
     isDirectDownload: true,
   };
@@ -123,14 +264,28 @@ export function buildCounterpartShortcuts(
     isDirectDownload: true,
   };
 
+  const vsixShortcut: DownloadShortcut = {
+    id: 'vscode-vsix',
+    targetPlatform: 'vscode',
+    label: 'VS Code Extension',
+    badge: '.VSIX',
+    description: `v${manifest.version} · IDE sidebar`,
+    url: manifest.vscodeVsixUrl || DEFAULT_RELEASE_MANIFEST.vscodeVsixUrl || '',
+    isDirectDownload: true,
+  };
+
   if (runtimeTarget === 'android') {
-    return [webShortcut, exeShortcut];
+    return [webShortcut, exeShortcut, vsixShortcut];
   }
 
   if (runtimeTarget === 'desktop') {
-    return [webShortcut, apkShortcut];
+    return [webShortcut, apkShortcut, vsixShortcut];
   }
 
-  // Web & extension: provide both Android APK and Windows EXE direct installers
-  return [apkShortcut, exeShortcut];
+  if (runtimeTarget === 'extension') {
+    return [webShortcut, apkShortcut, exeShortcut];
+  }
+
+  return [apkShortcut, exeShortcut, vsixShortcut];
 }
+

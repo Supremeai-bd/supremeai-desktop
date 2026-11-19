@@ -1,4 +1,4 @@
-name: "SupremeAI Single-Source Auto-Build & Release (Web + Desktop + Android)"
+name: "SupremeAI Single-Source Auto-Build & Release (Web + Desktop + Android + VSIX)"
 
 on:
   push:
@@ -52,7 +52,7 @@ concurrency:
 
 jobs:
   build-web:
-    name: "1/3 Build & Deploy Web Studio"
+    name: "1/4 Build & Deploy Web Studio"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -97,7 +97,7 @@ jobs:
           if-no-files-found: error
 
   build-desktop-windows:
-    name: "2/3 Auto-Build Desktop Installers (Windows NSIS & MSI)"
+    name: "2/4 Auto-Build Desktop Installers (Windows NSIS & MSI)"
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -144,7 +144,7 @@ jobs:
           if-no-files-found: error
 
   build-android-tauri-apk:
-    name: "3/3 Auto-Build Tauri v2 Android APK (Same React UI + Rust Core)"
+    name: "3/4 Auto-Build Tauri v2 Android APK (Same React UI + Rust Core)"
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
@@ -301,16 +301,48 @@ jobs:
           path: release-apks/*.apk
           if-no-files-found: error
 
+  build-vscode-vsix:
+    name: "4/4 Auto-Build VS Code Extension (.vsix)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Sync Version, Test & Package VSIX
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run version:sync
+          cd packages/vscode-extension
+          npm install --no-audit --no-fund
+          npm run compile
+          npm test
+          VER=$(node -p "require('./package.json').version")
+          npx --yes @vscode/vsce package --no-git-tag-version --out "supremeai-vscode-${VER}.vsix"
+
+      - name: Upload VS Code VSIX Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-vscode-vsix
+          path: packages/vscode-extension/*.vsix
+          if-no-files-found: error
+
   publish-unified-release:
-    name: "Publish Coordinated Release (Web + Desktop + Android)"
-    needs: [build-web, build-desktop-windows, build-android-tauri-apk]
+    name: "Publish Coordinated Release (Web + Desktop + Android + VSIX)"
+    needs: [build-web, build-desktop-windows, build-android-tauri-apk, build-vscode-vsix]
     if: github.event_name == 'push' || inputs.publish_release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Download All 3 Platform Artifacts
+      - name: Download All 4 Platform Artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
@@ -337,9 +369,9 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "is_pre=$is_pre" >> "$GITHUB_OUTPUT"
-          echo "title=SupremeAI Studio $tag (Web + Desktop + Android)" >> "$GITHUB_OUTPUT"
+          echo "title=SupremeAI Studio $tag (Web + Desktop + Android + VSIX)" >> "$GITHUB_OUTPUT"
 
-      - name: Generate Unified Release Manifest (Web + Desktop + Android)
+      - name: Generate Unified Release Manifest (Web + Desktop + Android + VSIX)
         env:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
           WEB_STUDIO_URL: https://supremeai-studio.pages.dev
@@ -361,5 +393,6 @@ jobs:
             release-artifacts/release-desktop-windows/**/*.exe
             release-artifacts/release-desktop-windows/**/*.msi
             release-artifacts/release-android-apk/*.apk
+            release-artifacts/release-vscode-vsix/*.vsix
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

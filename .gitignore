@@ -40,3 +40,8 @@ src-tauri/gen/android/*.jks
 
 # Generated GitHub release asset
 /latest-desktop.json
+/latest-release.json
+
+# VS Code extension build & packaged vsix artifacts
+packages/vscode-extension/out/
+*.vsix

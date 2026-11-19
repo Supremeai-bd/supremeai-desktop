@@ -9,6 +9,7 @@ mod admin;
 mod auth;
 mod feedback;
 mod speech;
+mod updater;
 
 use admin::{admin_dashboard, admin_login, admin_logout, admin_verify_totp, AdminSessionState};
 use auth::{
@@ -16,6 +17,7 @@ use auth::{
 };
 use feedback::submit_feedback;
 use speech::synthesize_speech;
+use updater::{apply_staged_update, get_app_runtime_info, stage_silent_update};
 
 const DEFAULT_GATEWAY: &str = "https://supremeai-api-ulw0.onrender.com";
 const MAX_PROMPT_BYTES: usize = 80_000;
@@ -262,7 +264,10 @@ pub fn run() {
             secure_set,
             secure_remove,
             submit_feedback,
-            synthesize_speech
+            synthesize_speech,
+            get_app_runtime_info,
+            stage_silent_update,
+            apply_staged_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running the SupremeAI application");

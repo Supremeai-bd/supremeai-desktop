@@ -1,5 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { Download, Globe, Monitor, Smartphone, ExternalLink } from 'lucide-react';
+import {
+  Code2,
+  Download,
+  ExternalLink,
+  Globe,
+  Monitor,
+  RefreshCw,
+  Smartphone,
+} from 'lucide-react';
 import { detectRuntimeTarget, type RuntimeTarget } from '../../bridge/platform';
 import {
   ALTERNATE_MONOREPO_RELEASES_URL,
@@ -8,6 +16,14 @@ import {
   type DownloadShortcut,
   type ReleaseManifest,
 } from '../../config/releaseDownloads';
+import {
+  applyReadyUpdate,
+  checkAndStageBackgroundUpdate,
+  fetchRemoteReleaseManifest,
+  getUpdateState,
+  subscribeUpdateState,
+  type AutoUpdateState,
+} from '../../services/appAutoUpdater';
 
 let sharedManifestCache: ReleaseManifest | null = null;
 let sharedManifestPromise: Promise<ReleaseManifest> | null = null;
@@ -15,17 +31,10 @@ let sharedManifestPromise: Promise<ReleaseManifest> | null = null;
 async function loadLatestReleaseManifest(): Promise<ReleaseManifest> {
   if (sharedManifestCache) return sharedManifestCache;
   if (!sharedManifestPromise) {
-    sharedManifestPromise = fetch('/api/releases/latest', {
-      headers: { Accept: 'application/json' },
-    })
-      .then(async (res) => {
-        if (!res.ok) return DEFAULT_RELEASE_MANIFEST;
-        const json = (await res.json().catch(() => null)) as ReleaseManifest | null;
-        if (json && json.windowsExeUrl && json.androidApkUrl) {
-          sharedManifestCache = json;
-          return json;
-        }
-        return DEFAULT_RELEASE_MANIFEST;
+    sharedManifestPromise = fetchRemoteReleaseManifest()
+      .then((manifest) => {
+        sharedManifestCache = manifest;
+        return manifest;
       })
       .catch(() => DEFAULT_RELEASE_MANIFEST);
   }
@@ -44,6 +53,8 @@ const iconForTarget = (target: DownloadShortcut['targetPlatform']) => {
       return <Smartphone className="w-3.5 h-3.5 shrink-0" />;
     case 'windows':
       return <Monitor className="w-3.5 h-3.5 shrink-0" />;
+    case 'vscode':
+      return <Code2 className="w-3.5 h-3.5 shrink-0" />;
     default:
       return <Globe className="w-3.5 h-3.5 shrink-0" />;
   }
@@ -58,14 +69,19 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
     sharedManifestCache || DEFAULT_RELEASE_MANIFEST
   );
   const [runtimeTarget] = useState<RuntimeTarget>(() => detectRuntimeTarget());
+  const [updateState, setUpdateState] = useState<AutoUpdateState>(() => getUpdateState());
 
   useEffect(() => {
     let active = true;
     void loadLatestReleaseManifest().then((resolved) => {
       if (active) setManifest(resolved);
     });
+    const unsubscribe = subscribeUpdateState((next) => {
+      if (active) setUpdateState(next);
+    });
     return () => {
       active = false;
+      unsubscribe();
     };
   }, []);
 
@@ -89,7 +105,17 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
       ? 'Android App'
       : runtimeTarget === 'desktop'
         ? 'Desktop App'
-        : 'Web Studio';
+        : runtimeTarget === 'extension'
+          ? 'VS Code Extension'
+          : 'Web Studio';
+
+  const compactLabelFor = (id: DownloadShortcut['id']) => {
+    if (id === 'web') return 'Web';
+    if (id === 'android-apk') return 'APK';
+    if (id === 'windows-exe') return 'EXE';
+    if (id === 'vscode-vsix') return 'VSIX';
+    return 'Get';
+  };
 
   if (variant === 'compact') {
     return (
@@ -99,10 +125,10 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
         <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 px-0.5">
           <span>
             {runtimeTarget === 'web'
-              ? 'Get Mobile & Desktop'
+              ? 'Get Apps & IDE'
               : runtimeTarget === 'android'
-                ? 'Web & Windows App'
-                : 'Web & Android APK'}
+                ? 'Web, Desktop & IDE'
+                : 'Web, Mobile & IDE'}
           </span>
           <a
             href={manifest.releasePageUrl}
@@ -115,7 +141,7 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
             <ExternalLink className="w-2.5 h-2.5" />
           </a>
         </div>
-        <div className="grid grid-cols-2 gap-1.5">
+        <div className="grid grid-cols-3 gap-1">
           {shortcuts.map((item) => (
             <a
               key={item.id}
@@ -123,20 +149,28 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
               target="_blank"
               rel="noopener noreferrer"
               download={item.isDirectDownload ? true : undefined}
-              className="flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 hover:border-[var(--theme-accent)] text-[11px] font-medium text-slate-700 dark:text-slate-200 transition-colors"
+              className="flex items-center justify-center gap-1 px-1.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 hover:border-[var(--theme-accent)] text-[10px] font-medium text-slate-700 dark:text-slate-200 transition-colors"
               title={`${item.label} (${item.description})`}
             >
               {iconForTarget(item.targetPlatform)}
-              <span className="truncate">
-                {item.id === 'web'
-                  ? 'Web'
-                  : item.id === 'android-apk'
-                    ? 'APK'
-                    : 'EXE'}
-              </span>
+              <span className="truncate">{compactLabelFor(item.id)}</span>
             </a>
           ))}
         </div>
+        {updateState.status === 'ready' && updateState.latestVersion && (
+          <button
+            type="button"
+            onClick={() => void applyReadyUpdate()}
+            className="w-full flex items-center justify-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 transition-colors"
+            title={updateState.message || 'Apply cached background update'}
+          >
+            <RefreshCw className="w-3 h-3" />
+            <span>
+              v{updateState.latestVersion} Ready ·{' '}
+              {updateState.silentSupported ? 'Silent Update' : 'Install APK'}
+            </span>
+          </button>
+        )}
       </div>
     );
   }
@@ -149,14 +183,48 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
         <div>
           <h3 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
             <Download className="w-4 h-4 theme-accent-text" />
-            <span>SupremeAI Cross-Platform Shortcuts</span>
+            <span>SupremeAI Unified Releases (Web · APK · EXE · VSIX)</span>
           </h3>
           <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
             Running on <strong className="text-slate-700 dark:text-slate-200">{runtimeLabel}</strong>.
-            Direct installers from latest GitHub Actions build ({manifest.repo} · v{manifest.version}).
+            Direct builds from {manifest.repo} · v{manifest.version} (auto-updates silently in background).
           </p>
         </div>
         <div className="flex items-center gap-2 text-[11px]">
+          {updateState.status === 'ready' && updateState.latestVersion ? (
+            <button
+              type="button"
+              onClick={() => void applyReadyUpdate()}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 font-semibold whitespace-nowrap transition-colors"
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span>
+                Update to v{updateState.latestVersion}
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void checkAndStageBackgroundUpdate(true)}
+              disabled={updateState.status === 'checking' || updateState.status === 'staging'}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium whitespace-nowrap disabled:opacity-60"
+            >
+              <RefreshCw
+                className={`w-3 h-3 ${
+                  updateState.status === 'checking' || updateState.status === 'staging'
+                    ? 'animate-spin'
+                    : ''
+                }`}
+              />
+              <span>
+                {updateState.status === 'staging'
+                  ? 'Staging Silently…'
+                  : updateState.status === 'checking'
+                    ? 'Checking…'
+                    : 'Check Update'}
+              </span>
+            </button>
+          )}
           <a
             href={manifest.releasePageUrl}
             target="_blank"
@@ -169,7 +237,21 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
         </div>
       </div>
 
-      <div className={`grid grid-cols-1 ${shortcuts.length >= 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2'} gap-3`}>
+      {updateState.message && (
+        <div className="text-[11px] font-mono px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-800 text-slate-600 dark:text-slate-300">
+          {updateState.message}
+        </div>
+      )}
+
+      <div
+        className={`grid grid-cols-1 ${
+          shortcuts.length >= 4
+            ? 'sm:grid-cols-2 lg:grid-cols-4'
+            : shortcuts.length === 3
+              ? 'sm:grid-cols-3'
+              : 'sm:grid-cols-2'
+        } gap-3`}
+      >
         {shortcuts.map((item) => (
           <a
             key={item.id}
@@ -207,7 +289,20 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
       {variant === 'full' && (
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-slate-500 dark:text-slate-400">
           <span>
-            ARMv7 / MSI installers & source mirror:{' '}
+            Additional packages & mirrors:{' '}
+            {manifest.vscodeVsixUrl && (
+              <>
+                <a
+                  href={manifest.vscodeVsixUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-cyan-600 dark:text-cyan-400 hover:underline font-mono"
+                >
+                  VS Code .vsix
+                </a>
+                {' · '}
+              </>
+            )}
             {manifest.androidArmv7ApkUrl && (
               <>
                 <a
@@ -251,3 +346,4 @@ export const PlatformDownloadsCard: React.FC<PlatformDownloadsCardProps> = ({
     </div>
   );
 };
+

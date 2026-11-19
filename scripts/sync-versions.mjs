@@ -29,4 +29,10 @@ const cargoRaw = readFileSync(cargoPath, 'utf8');
 const cargoUpdated = cargoRaw.replace(/^version\s*=\s*"[^"]+"/m, `version = "${version}"`);
 writeFileSync(cargoPath, cargoUpdated);
 
-console.log(`Synchronized Web, Desktop, and Tauri v2 Android to version ${version}`);
+// 3. VS Code Extension (VSIX)
+const vscodePkgPath = path.join(root, 'packages', 'vscode-extension', 'package.json');
+const vscodePkg = JSON.parse(readFileSync(vscodePkgPath, 'utf8'));
+vscodePkg.version = version;
+writeFileSync(vscodePkgPath, `${JSON.stringify(vscodePkg, null, 2)}\n`);
+
+console.log(`Synchronized Web, Desktop, Android APK, and VS Code VSIX to version ${version}`);
