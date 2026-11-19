@@ -28,6 +28,7 @@ import { usePlatformStore } from '../../stores/usePlatformStore';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { useControlCenterStore } from '../../stores/useControlCenterStore';
 import { ControlCenterSafetyBar } from './ControlCenterSafetyGateModal';
+import { AdminQuickStatsCard } from './AdminQuickStatsCard';
 import { useI18n } from '../../utils/i18n';
 
 interface AdminOverviewViewProps {
@@ -61,9 +62,12 @@ export const AdminOverviewView: React.FC<AdminOverviewViewProps> = ({
     ecosystemDiagnostics,
     isDiagnosing,
     isLoadingDiagnostics,
+    isLoadingHealth,
+    isProbingHealth,
     loadOverview,
     loadServiceHealth,
     loadEcosystemDiagnostics,
+    runServiceHealthProbe,
     runDeepDiagnose,
     generateDagPlan,
   } = useControlCenterStore();
@@ -168,6 +172,16 @@ export const AdminOverviewView: React.FC<AdminOverviewViewProps> = ({
           latestDiagnose?.provenance || latestGithubCommit?.provenance || 'local-snapshot'
         }
         subtitle={`${pendingHitlCount ?? 0} HITL pending · ${activeTakeoversCount ?? 0} takeovers · ${unclaimedBridgeCount ?? 0} unclaimed bridge orders`}
+      />
+
+      {/* Quick Stats: Fast MCP Tower Health & Usage Pulse Check */}
+      <AdminQuickStatsCard
+        healthSnapshot={healthSnapshot}
+        trafficSummary={trafficSummary}
+        services={services}
+        isRefreshing={isLoadingHealth || isProbingHealth}
+        onPulseRefresh={() => void runServiceHealthProbe(authUser?.email)}
+        onNavigateTab={onNavigateTab}
       />
 
       {/* Live 5-Layer Deep Diagnose TruthMatrix & ReleaseGate Strip */}
