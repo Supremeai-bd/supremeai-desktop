@@ -1,3 +1,4 @@
+import { mockEdgePreferences, testEdgeEnv, testSessionHeaders } from '../test/edgePreferences';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 
 const { createMemoryStorage } = vi.hoisted(() => {
@@ -216,7 +217,8 @@ describe('Workspace Browser URL Normalization', () => {
 
     const edgeRes = await browserProxyEdgeHandler({
       request: new Request(
-        'https://supremeai.pages.dev/api/workspace/browser-proxy?url=https%3A%2F%2Fexample.com'
+        'https://supremeai.pages.dev/api/workspace/browser-proxy?url=https%3A%2F%2Fexample.com',
+        { headers: testSessionHeaders }
       ),
     });
     expect(edgeRes.status).toBe(200);
@@ -1042,7 +1044,7 @@ describe('Hybrid Web Vault: AES-256-GCM Encryption, Domain Isolation & Zero LLM 
     const edgeProxyRes = await browserProxyEdgeHandler({
       request: new Request(
         'https://supremeai.pages.dev/api/workspace/browser-proxy?url=https%3A%2F%2Fportal.example.com%2Fapp',
-        { headers: { 'X-Vault-Cookie': 'portal_sid=vault_token_123' } }
+        { headers: { ...testSessionHeaders, 'X-Vault-Cookie': 'portal_sid=vault_token_123' } }
       ),
     });
     expect(upstreamCookieSeen).toBe('portal_sid=vault_token_123');
@@ -1051,10 +1053,12 @@ describe('Hybrid Web Vault: AES-256-GCM Encryption, Domain Isolation & Zero LLM 
   });
 
   it('stores, filters by domain without returning encrypted payloads, and deletes records in Edge browser-vault API', async () => {
+    globalThis.fetch = vi.fn(mockEdgePreferences());
     const postRes = await browserVaultEdgeHandler({
+      env: testEdgeEnv,
       request: new Request('https://supremeai.pages.dev/api/workspace/browser-vault', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...testSessionHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: 'vault_edge_1',
           domain: 'github.com',
@@ -1070,8 +1074,10 @@ describe('Hybrid Web Vault: AES-256-GCM Encryption, Domain Isolation & Zero LLM 
     expect(postRes.status).toBe(200);
 
     const getRes = await browserVaultEdgeHandler({
+      env: testEdgeEnv,
       request: new Request(
-        'https://supremeai.pages.dev/api/workspace/browser-vault?domain=github.com'
+        'https://supremeai.pages.dev/api/workspace/browser-vault?domain=github.com',
+        { headers: testSessionHeaders }
       ),
     });
     expect(getRes.status).toBe(200);
@@ -1084,10 +1090,12 @@ describe('Hybrid Web Vault: AES-256-GCM Encryption, Domain Isolation & Zero LLM 
     expect(getBody.entries[0].encryptedPayload).toBeUndefined();
 
     const delRes = await browserVaultEdgeHandler({
+      env: testEdgeEnv,
       request: new Request(
         'https://supremeai.pages.dev/api/workspace/browser-vault?id=vault_edge_1',
         {
           method: 'DELETE',
+          headers: testSessionHeaders,
         }
       ),
     });
@@ -1125,7 +1133,8 @@ describe('Hybrid Web Vault: AES-256-GCM Encryption, Domain Isolation & Zero LLM 
 
     const proxyRes = await browserProxyEdgeHandler({
       request: new Request(
-        'https://supremeai.pages.dev/api/workspace/browser-proxy?url=https%3A%2F%2Fportal.example.com%2Flogin'
+        'https://supremeai.pages.dev/api/workspace/browser-proxy?url=https%3A%2F%2Fportal.example.com%2Flogin',
+        { headers: testSessionHeaders }
       ),
     });
     const proxyJson = (await proxyRes.json()) as { html: string };
@@ -1160,12 +1169,13 @@ describe('Hybrid Web Vault: AES-256-GCM Encryption, Domain Isolation & Zero LLM 
     expect(importedEntries[0].id).toBe(created.id);
 
     // Push & pull via Edge browser-vault ?includeEncrypted=1
+    localStorage.setItem('supremeai_access_token', testSessionHeaders.Authorization.slice(7));
+    const preferencesFetch = mockEdgePreferences();
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const rawUrl = String(input);
-      const fullUrl = rawUrl.startsWith('/') ? `https://supremeai.pages.dev${rawUrl}` : rawUrl;
-      const req = new Request(fullUrl, init);
-      return await browserVaultEdgeHandler({ request: req });
-    }) as typeof fetch;
+      const url = new URL(String(input), 'https://supremeai.pages.dev');
+      if (url.origin === testEdgeEnv.SUPREMEAI_BACKEND_URL) return preferencesFetch(url, init);
+      return browserVaultEdgeHandler({ request: new Request(url, init), env: testEdgeEnv });
+    });
 
     const syncRes = await syncVaultWithCloud();
     expect(syncRes.ok).toBe(true);
@@ -1174,12 +1184,13 @@ describe('Hybrid Web Vault: AES-256-GCM Encryption, Domain Isolation & Zero LLM 
   });
 
   it('manages BrowserScheduledTask CRUD locally and via Edge browser-schedules API', async () => {
+    localStorage.setItem('supremeai_access_token', testSessionHeaders.Authorization.slice(7));
+    const preferencesFetch = mockEdgePreferences();
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const rawUrl = String(input);
-      const fullUrl = rawUrl.startsWith('/') ? `https://supremeai.pages.dev${rawUrl}` : rawUrl;
-      const req = new Request(fullUrl, init);
-      return await browserSchedulesEdgeHandler({ request: req });
-    }) as typeof fetch;
+      const url = new URL(String(input), 'https://supremeai.pages.dev');
+      if (url.origin === testEdgeEnv.SUPREMEAI_BACKEND_URL) return preferencesFetch(url, init);
+      return browserSchedulesEdgeHandler({ request: new Request(url, init), env: testEdgeEnv });
+    });
 
     const { created: vaultEntry } = await saveSessionSnapshot({
       url: 'https://analytics.example.com',
@@ -1211,7 +1222,8 @@ describe('Hybrid Web Vault: AES-256-GCM Encryption, Domain Isolation & Zero LLM 
 
     // Verify Edge schedule list has persisted record
     const edgeGet = await browserSchedulesEdgeHandler({
-      request: new Request('https://supremeai.pages.dev/api/workspace/browser-schedules'),
+      env: testEdgeEnv,
+      request: new Request('https://supremeai.pages.dev/api/workspace/browser-schedules', { headers: testSessionHeaders }),
     });
     const edgeList = (await edgeGet.json()) as { schedules: Array<{ id: string }> };
     expect(edgeList.schedules.some((s) => s.id === task.id)).toBe(true);
@@ -1360,7 +1372,8 @@ describe('Multi-Tab Virtual Browser & Git OAuth Helpers', () => {
 
     const proxyRes = await browserProxyEdgeHandler({
       request: new Request(
-        'https://supremeai.pages.dev/api/workspace/browser-proxy?url=https%3A%2F%2Fbank.example.com%2Flogin'
+        'https://supremeai.pages.dev/api/workspace/browser-proxy?url=https%3A%2F%2Fbank.example.com%2Flogin',
+        { headers: testSessionHeaders }
       ),
     });
     const proxyJson = (await proxyRes.json()) as { html: string };
@@ -1436,7 +1449,8 @@ describe('Multi-Tab Virtual Browser & Git OAuth Helpers', () => {
 
     const proxyRes = await browserProxyEdgeHandler({
       request: new Request(
-        'https://supremeai.pages.dev/api/workspace/browser-proxy?url=https%3A%2F%2Ffb.com%2F'
+        'https://supremeai.pages.dev/api/workspace/browser-proxy?url=https%3A%2F%2Ffb.com%2F',
+        { headers: testSessionHeaders }
       ),
     });
     expect(proxyRes.status).toBe(200);
@@ -1507,7 +1521,7 @@ describe('Multi-Tab Virtual Browser & Git OAuth Helpers', () => {
     const formRes = await browserProxyEdgeHandler({
       request: new Request('https://supremeai.pages.dev/api/workspace/browser-proxy', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...testSessionHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: 'https://portal.example.com/login',
           method: 'POST',
@@ -1535,7 +1549,7 @@ describe('Multi-Tab Virtual Browser & Git OAuth Helpers', () => {
     const rpcRes = await browserProxyEdgeHandler({
       request: new Request('https://supremeai.pages.dev/api/workspace/browser-proxy', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...testSessionHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: 'https://portal.example.com/api/session',
           method: 'POST',

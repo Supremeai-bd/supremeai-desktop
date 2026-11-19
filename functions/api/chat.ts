@@ -7,6 +7,33 @@ import {
   extractLlmCompletionText,
 } from '../_lib/edgeHelpers';
 
+type Attachment = { name?: string; mimeType?: string; data?: string };
+interface ChatMessage {
+  role?: string;
+  content: string | Record<string, unknown>[];
+  attachment?: Attachment;
+  attachments?: Attachment[];
+  parts?: unknown[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isAttachment(value: unknown): value is Attachment {
+  return isRecord(value) && ['name', 'mimeType', 'data'].every(
+    (key) => value[key] === undefined || typeof value[key] === 'string'
+  );
+}
+
+function isChatMessage(value: unknown): value is ChatMessage {
+  return isRecord(value) && (value.role === undefined || typeof value.role === 'string') &&
+    (typeof value.content === 'string' || (Array.isArray(value.content) && value.content.every(isRecord))) &&
+    (value.attachment === undefined || isAttachment(value.attachment)) &&
+    (value.attachments === undefined || (Array.isArray(value.attachments) && value.attachments.every(isAttachment))) &&
+    (value.parts === undefined || Array.isArray(value.parts));
+}
+
 export async function onRequest(context: PagesContext): Promise<Response> {
   const { request, env } = context;
   if (request.method === 'OPTIONS') return handleCorsPreflight(request);
@@ -14,56 +41,29 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     return jsonEdgeResponse({ error: 'Method not allowed' }, 405, request);
   }
 
-  const body = (await request.json().catch(() => ({}))) as {
-    model?: string;
-    messages?: Array<{
-      role: string;
-      content: string | Array<Record<string, unknown>>;
-      attachment?: { name?: string; mimeType?: string; data?: string };
-      attachments?: Array<{ name?: string; mimeType?: string; data?: string }>;
-      parts?: unknown[];
-    }>;
-    systemInstruction?: string;
-    groundingContext?: string;
-    language?: 'en' | 'bn';
-    temperature?: number;
-    top_p?: number;
-    max_tokens?: number;
-    thinking_budget?: number;
-    run_config?: Record<string, unknown>;
-  };
+  const body: unknown = await request.json().catch(() => null);
+  if (!isRecord(body) || !Array.isArray(body.messages) || !body.messages.length ||
+      !body.messages.every(isChatMessage) ||
+      !['model', 'systemInstruction', 'groundingContext'].every(
+        (key) => body[key] === undefined || typeof body[key] === 'string'
+      ) || (body.language !== undefined && body.language !== 'en' && body.language !== 'bn') ||
+      !['temperature', 'top_p', 'max_tokens', 'thinking_budget'].every(
+        (key) => body[key] === undefined || Number.isFinite(body[key])
+      ) || (body.run_config !== undefined && !isRecord(body.run_config))) {
+    return jsonEdgeResponse({ error: 'Invalid chat request: expected a non-empty array of valid messages and valid chat options.' }, 400, request);
+  }
+  const rawMessages = body.messages as ChatMessage[];
+  const systemInstruction = typeof body.systemInstruction === 'string' ? body.systemInstruction.trim() : '';
+  const groundingContext = typeof body.groundingContext === 'string' ? body.groundingContext.trim() : '';
+  const model = (typeof body.model === 'string' && body.model) || 'supreme-spark';
 
-  const rawMessages = Array.isArray(body.messages) ? body.messages : [];
-  if (rawMessages.length === 0) {
-    return jsonEdgeResponse({ error: 'messages array is required.' }, 400, request);
+  const upstreamMessages: ChatMessage[] = [];
+  if (systemInstruction) upstreamMessages.push({ role: 'system', content: systemInstruction });
+  if (groundingContext) {
+    upstreamMessages.push({ role: 'system', content: `Grounding Context:\n${groundingContext}` });
   }
-
-  const upstreamMessages: Array<{
-    role: string;
-    content: string | Array<Record<string, unknown>>;
-    attachment?: { name?: string; mimeType?: string; data?: string };
-    attachments?: Array<{ name?: string; mimeType?: string; data?: string }>;
-    parts?: unknown[];
-  }> = [];
-  if (body.systemInstruction?.trim()) {
-    upstreamMessages.push({ role: 'system', content: body.systemInstruction.trim() });
-  }
-  if (body.groundingContext?.trim()) {
-    upstreamMessages.push({
-      role: 'system',
-      content: `Grounding Context:\n${body.groundingContext.trim()}`,
-    });
-  }
-  for (const m of rawMessages) {
-    if (m && (typeof m.content === 'string' || Array.isArray(m.content))) {
-      upstreamMessages.push({
-        role: m.role || 'user',
-        content: m.content,
-        ...(m.attachment ? { attachment: m.attachment } : {}),
-        ...(Array.isArray(m.attachments) ? { attachments: m.attachments } : {}),
-        ...(Array.isArray(m.parts) ? { parts: m.parts } : {}),
-      });
-    }
+  for (const { role, content, attachment, attachments, parts } of rawMessages) {
+    upstreamMessages.push({ role: role || 'user', content, attachment, attachments, parts });
   }
 
   try {
@@ -73,7 +73,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       upstreamOrigin,
       authHeaders,
       {
-        model: body.model || 'supreme-spark',
+        model,
         messages: upstreamMessages,
         language: body.language || 'en',
         ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
@@ -96,7 +96,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     }
 
     return jsonEdgeResponse(
-      { text, model: body.model || 'supreme-spark', source: 'edge-chat' },
+      { text, model, source: 'edge-chat' },
       200,
       request
     );

@@ -6,6 +6,12 @@ on:
       - main
     paths:
       - "src/**"
+      - "functions/**"
+      - "public/**"
+      - "scripts/**"
+      - "tsconfig*.json"
+      - "vite*.config.ts"
+      - ".npmrc"
       - "packages/**"
       - "src-tauri/**"
       - "server.ts"
@@ -56,10 +62,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
 
       - name: Sync Version, Test & Build Web Bundle
@@ -68,9 +74,10 @@ jobs:
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
         run: |
           set -euo pipefail
-          npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
+          npm ci
           npm run version:sync
-          npm run test:security
+          npm test
+          npm run typecheck:edge
           npm run build:web
           tar -czf supremeai-web-dist.tar.gz dist/
 
@@ -97,10 +104,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
 
       - name: Setup Rust toolchain
@@ -117,7 +124,7 @@ jobs:
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
         run: |
           set -euo pipefail
-          npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
+          npm ci
           npm run version:sync
           npm run build:app
 
@@ -144,10 +151,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
 
       - name: Setup JDK 21 (Required by Tauri v2 Gradle 9 + AGP 9)
@@ -216,7 +223,7 @@ jobs:
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
         run: |
           set -euo pipefail
-          npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
+          npm ci
           npm run version:sync
           npm run build:app
 
@@ -304,20 +311,32 @@ jobs:
 
       - name: Determine Release Tag & Prerelease Mode
         id: version
+        env:
+          REQUESTED_TAG: ${{ inputs.release_version }}
+          REQUESTED_PRERELEASE: ${{ inputs.prerelease }}
         run: |
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "is_pre=false" >> "$GITHUB_OUTPUT"
-            echo "title=SupremeAI Studio ${GITHUB_REF_NAME} (Web + Desktop + Android)" >> "$GITHUB_OUTPUT"
-          elif [[ -n "${{ inputs.release_version }}" ]]; then
-            echo "tag=${{ inputs.release_version }}" >> "$GITHUB_OUTPUT"
-            echo "is_pre=${{ inputs.prerelease || false }}" >> "$GITHUB_OUTPUT"
-            echo "title=SupremeAI Studio ${{ inputs.release_version }} (Web + Desktop + Android)" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-            echo "is_pre=true" >> "$GITHUB_OUTPUT"
-            echo "title=SupremeAI Studio Latest Build (Web + Desktop + Android)" >> "$GITHUB_OUTPUT"
+          version=$(node -p "require('./package.json').version")
+          tag="latest"
+          is_pre=true
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            tag="$GITHUB_REF_NAME"
+            is_pre=false
+          elif [[ -n "$REQUESTED_TAG" ]]; then
+            tag="$REQUESTED_TAG"
+            is_pre="${REQUESTED_PRERELEASE:-false}"
           fi
+          if [[ "$tag" != latest && "$tag" != "v$version" ]]; then
+            echo "::error::Release tag must match package.json (v$version)."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "is_pre=$is_pre" >> "$GITHUB_OUTPUT"
+          echo "title=SupremeAI Studio $tag (Web + Desktop + Android)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate Desktop Release Manifest
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: node scripts/desktop-release-manifest.mjs
 
       - name: Publish Single Coordinated GitHub Release
         uses: softprops/action-gh-release@v2
@@ -329,6 +348,7 @@ jobs:
           generate_release_notes: true
           make_latest: ${{ steps.version.outputs.is_pre == 'false' && 'true' || 'false' }}
           files: |
+            latest-desktop.json
             release-artifacts/release-web-bundle/*.tar.gz
             release-artifacts/release-desktop-windows/**/*.exe
             release-artifacts/release-desktop-windows/**/*.msi

@@ -1,13 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-
-const pkg = JSON.parse(
-  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8')
-) as { version: string };
 
 export default defineConfig(() => {
   const isTauriBuild = Boolean(process.env.TAURI_ENV_PLATFORM);
@@ -16,9 +10,6 @@ export default defineConfig(() => {
     base: isTauriBuild ? './' : '/',
     plugins: [react(), tailwindcss()],
     clearScreen: false,
-    define: {
-      __APP_VERSION__: JSON.stringify(pkg.version),
-    },
     resolve: {
       alias: {
         '@': path.resolve(import.meta.dirname, '.'),

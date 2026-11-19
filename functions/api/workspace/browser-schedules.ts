@@ -125,7 +125,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         updatedAt: now,
       };
 
-      await fetchWithTimeout(
+      const saveRes = await fetchWithTimeout(
         `${upstreamOrigin}/api/v1/user/preferences`,
         {
           method: 'POST',
@@ -133,11 +133,20 @@ export async function onRequest(context: PagesContext): Promise<Response> {
           body: JSON.stringify({ browser_schedules: schedules }),
         },
         5500
-      ).catch(() => {});
+      ).catch(() => null);
+      if (!saveRes?.ok) {
+        return jsonEdgeResponse(
+          { success: false, persisted: false, status: runStatus, summary: runSummary,
+            error: 'Failed to persist schedule run results.' },
+          saveRes?.status === 401 || saveRes?.status === 403 ? saveRes.status : 502,
+          request, undefined, env
+        );
+      }
 
       return jsonEdgeResponse(
         {
           success: runStatus === 'ok',
+          persisted: true,
           status: runStatus,
           summary: runSummary,
           schedule: schedules[idx],
