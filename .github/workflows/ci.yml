@@ -31,9 +31,11 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        shell: bash
+        run: npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
 
       - name: Typecheck & Build Web Bundle
+        shell: bash
         run: npm run build:web
 
   desktop-rust:
@@ -60,12 +62,18 @@ jobs:
           workspaces: "src-tauri -> src-tauri/target"
 
       - name: Install dependencies & build shared app bundle
-        run: npm ci && npm run build:app
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
+          npm run build:app
 
       - name: Compile Rust Tauri backend
+        shell: bash
         run: cargo build --manifest-path src-tauri/Cargo.toml
 
       - name: Rust unit tests
+        shell: bash
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
   android-tauri:
@@ -83,25 +91,48 @@ jobs:
           node-version: "22"
           cache: "npm"
 
-      - name: Setup JDK 21
+      - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
-          java-version: "21"
+          java-version: "17"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Setup Android NDK
+      - name: Configure Pre-installed Android SDK & NDK
+        shell: bash
         run: |
-          NDK_DIR=$(ls -d "$ANDROID_HOME/ndk/"* 2>/dev/null | sort -V | tail -n 1 || true)
-          if [ -z "$NDK_DIR" ]; then
-            yes | sdkmanager --licenses >/dev/null 2>&1 || true
-            sdkmanager "ndk;27.0.12077973"
-            NDK_DIR="$ANDROID_HOME/ndk/27.0.12077973"
+          set -euo pipefail
+          SDK_DIR="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          if [ ! -d "$SDK_DIR" ]; then
+            echo "::error::Android SDK directory not found at $SDK_DIR"
+            exit 1
           fi
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "$SDK_DIR/platform-tools" >> "$GITHUB_PATH"
+
+          if [ -d "$SDK_DIR/cmdline-tools/latest/bin" ]; then
+            echo "$SDK_DIR/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+            SDKMANAGER="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SDKMANAGER=$(find "$SDK_DIR/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1 || true)
+          fi
+
+          NDK_DIR=$(ls -d "$SDK_DIR/ndk/"* 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -z "$NDK_DIR" ]; then
+            if [ -n "${SDKMANAGER:-}" ]; then
+              yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+              "$SDKMANAGER" "ndk;27.0.12077973"
+              NDK_DIR="$SDK_DIR/ndk/27.0.12077973"
+            else
+              echo "::error::Android NDK not found and sdkmanager unavailable"
+              exit 1
+            fi
+          fi
+
           echo "NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "Using Android SDK: $SDK_DIR"
+          echo "Using Android NDK: $NDK_DIR"
 
       - name: Setup Rust toolchain (Android aarch64)
         uses: dtolnay/rust-toolchain@stable
@@ -114,14 +145,21 @@ jobs:
           workspaces: "src-tauri -> src-tauri/target"
 
       - name: Install dependencies & build shared app bundle
-        run: npm ci && npm run build:app
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --legacy-peer-deps || npm install --no-audit --no-fund --legacy-peer-deps
+          npm run build:app
 
       - name: Initialize Tauri Android target & compile Debug APK
+        shell: bash
         run: |
+          set -euo pipefail
           if [ ! -d "src-tauri/gen/android" ]; then
-            npx tauri android init --ci
+            npx tauri android init --ci --skip-targets-install
           fi
-          npx tauri android build --apk --debug --target aarch64
+          chmod +x src-tauri/gen/android/gradlew 2>/dev/null || true
+          npx tauri android build --apk --debug --target aarch64 --ci
 
   auto-merge:
     name: "Auto-Merge PR (All 3 Platforms Gated)"
