@@ -163,10 +163,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -d "src-tauri/gen/android" ]; then
-            npx tauri android init --ci --skip-targets-install
+            npm run tauri -- android init --ci --skip-targets-install
           fi
           chmod +x src-tauri/gen/android/gradlew 2>/dev/null || true
-          npx tauri android build --apk --debug --target aarch64 --ci
+          npm run tauri -- android build --apk --debug --target aarch64 --ci
 
   auto-merge:
     name: "Auto-Merge PR (All 3 Platforms Gated)"

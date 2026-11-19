@@ -118,7 +118,7 @@ jobs:
 
       - name: Build Tauri NSIS & MSI Installers
         shell: bash
-        run: npx tauri build --config src-tauri/tauri.conf.json
+        run: npm run tauri -- build --config src-tauri/tauri.conf.json
 
       - name: Upload Desktop Artifacts
         uses: actions/upload-artifact@v4
@@ -216,10 +216,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -d "src-tauri/gen/android" ]; then
-            npx tauri android init --ci --skip-targets-install
+            npm run tauri -- android init --ci --skip-targets-install
           fi
           chmod +x src-tauri/gen/android/gradlew 2>/dev/null || true
-          npx tauri android build --apk --target aarch64 --target armv7 --ci
+          npm run tauri -- android build --apk --target aarch64 --target armv7 --ci
 
       - name: Sign Android APK (v2/v3 apksigner for Android 11-15+)
         shell: bash
