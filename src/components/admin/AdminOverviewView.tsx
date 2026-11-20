@@ -1006,3 +1006,8 @@ export const AdminOverviewView: React.FC<AdminOverviewViewProps> = ({
     </div>
   );
 };
+
+
+export default function HomePage() {
+  return <AdminOverviewView customers={[]} services={[]} workers={[]} jobs={[]} onNavigateTab={() => {}} onOpenDangerConfirm={() => {}} />;
+}
