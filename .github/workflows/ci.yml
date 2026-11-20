@@ -36,7 +36,11 @@ jobs:
 
       - name: Run JavaScript Tests
         shell: bash
-        run: npm test
+        # FIX: Use node environment for vitest to avoid fetchSpy/esbuild errors in Edge functions tests
+        run: |
+          npm test -- --environment node --coverage
+          # Ensure specific test files that cause esbuild parse errors are skipped or handled
+          # (src/server/*.test.ts are already handled by vitest config)
 
       - name: Typecheck Cloudflare Edge Functions
         run: npm run typecheck:edge
