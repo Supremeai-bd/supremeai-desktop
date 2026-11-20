@@ -23,7 +23,7 @@ interface PagesContext {
   env?: Record<string, string | undefined>;
 }
 
-const DEFAULT_UPSTREAM_ORIGIN = 'https://supremeai-primary-node-5xso.onrender.com';
+const DEFAULT_UPSTREAM_ORIGIN = 'https://supremeai-api-ulw0.onrender.com';
 
 interface ProxyRequestPayload {
   url: string;

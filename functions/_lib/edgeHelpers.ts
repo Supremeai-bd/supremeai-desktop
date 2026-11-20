@@ -4,8 +4,8 @@ export interface PagesContext {
   params?: Record<string, string | string[] | undefined>;
 }
 
-export const DEFAULT_UPSTREAM_ORIGIN = 'https://supremeai-primary-node-5xso.onrender.com';
-export const FALLBACK_UPSTREAM_ORIGIN = 'https://supremeai-api-ulw0.onrender.com';
+export const DEFAULT_UPSTREAM_ORIGIN = 'https://supremeai-api-ulw0.onrender.com';
+export const FALLBACK_UPSTREAM_ORIGIN = 'https://supremeai-primary-node-5xso.onrender.com';
 export const DEFAULT_MCP_TOWER_ORIGIN = 'https://supremeai-mcp-tower-live.onrender.com';
 
 export function resolveUpstreamOrigin(env?: Record<string, string | undefined>): string {

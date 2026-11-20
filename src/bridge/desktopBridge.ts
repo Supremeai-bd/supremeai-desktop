@@ -1,6 +1,6 @@
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 
-export const DEFAULT_GATEWAY_URL = 'https://supremeai-primary-node-5xso.onrender.com';
+export const DEFAULT_GATEWAY_URL = 'https://supremeai-api-ulw0.onrender.com';
 const WEB_USER_SESSION_KEY = 'supremeai.desktop.web_user.v1';
 const WEB_ADMIN_SESSION_KEY = 'supremeai.desktop.web_admin.v1';
 const WEB_FEEDBACK_LOG_KEY = 'supremeai.desktop.web_feedback.v1';

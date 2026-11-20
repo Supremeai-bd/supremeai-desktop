@@ -14,8 +14,8 @@ interface PagesContext {
   params?: { path?: string | string[] };
 }
 
-const DEFAULT_UPSTREAM_ORIGIN = 'https://supremeai-primary-node-5xso.onrender.com';
-const FALLBACK_UPSTREAM_ORIGIN = 'https://supremeai-api-ulw0.onrender.com';
+const DEFAULT_UPSTREAM_ORIGIN = 'https://supremeai-api-ulw0.onrender.com';
+const FALLBACK_UPSTREAM_ORIGIN = 'https://supremeai-primary-node-5xso.onrender.com';
 
 const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   'host',
