@@ -18,7 +18,11 @@ export async function onRequest(context: PagesContext): Promise<Response> {
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
   if (!bearer || bearer.startsWith('tok_guest_') || bearer.startsWith('sk-supreme-guest')) {
     return jsonEdgeResponse(
-      { success: false, verified: false, error: 'Authentication is required for 2FA verification.' },
+      {
+        success: false,
+        verified: false,
+        error: 'Authentication is required for 2FA verification.',
+      },
       401,
       request,
       undefined,
