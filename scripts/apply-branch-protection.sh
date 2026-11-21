@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 # Apply branch protection to `main` so a red CI can never be merged again.
 #
-# PR #7 was merged while all three workflows were failing, which put a
-# duplicated 2,172-line block into server.ts and broke every build. This
-# script makes that outcome impossible.
-#
 # Requires a token with "Administration: write" on the repo:
 #   GH_TOKEN=<your-token> ./scripts/apply-branch-protection.sh
 #
