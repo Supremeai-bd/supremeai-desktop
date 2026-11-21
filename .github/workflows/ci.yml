@@ -22,9 +22,9 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js 24
+      - name: Setup Node.js 24 (npm cache)
         uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -52,9 +52,9 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js 24
+      - name: Setup Node.js 24 (npm cache)
         uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -90,9 +90,9 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js 24
+      - name: Setup Node.js 24 (npm cache)
         uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -182,9 +182,9 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js 24
+      - name: Setup Node.js 24 (npm cache)
         uses: actions/setup-node@v4
         with:
           node-version: "24"
