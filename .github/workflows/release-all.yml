@@ -61,9 +61,9 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js 24
+      - name: Setup Node.js 24 (npm cache)
         uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -114,9 +114,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js 24
+      - name: Setup Node.js 24 (npm cache)
         uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -161,9 +161,9 @@ jobs:
     timeout-minutes: 50
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js 24
+      - name: Setup Node.js 24 (npm cache)
         uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -319,9 +319,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js 24
+      - name: Setup Node.js 24 (npm cache)
         uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -352,7 +352,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download All 4 Platform Artifacts
         uses: actions/download-artifact@v4

@@ -1,19 +1,34 @@
-import { fetch } from 'undici'; // or node fetch
 import { DEFAULT_MCP_TOWER_ORIGIN } from '../config/platformEndpoints';
 
-export async function callMcpTowerRpc(path: string, body?: any, headers?: Record<string, string>) {
-  const origin = process.env.SUPREMEAI_MCP_TOWER_URL?.trim() || DEFAULT_MCP_TOWER_ORIGIN;
-  const url = `${origin.replace(/\/+$/, '')}${path.startsWith('/') ? path : '/' + path}`;
-  
+/**
+ * Minimal MCP Tower RPC client shared by the web build, the desktop shell and
+ * the edge functions. Uses the global `fetch` (Node 18+, Cloudflare Workers,
+ * Tauri webview) so no extra runtime dependency is required.
+ */
+
+function resolveOrigin(): string {
+  return (process.env.SUPREMEAI_MCP_TOWER_URL?.trim() || DEFAULT_MCP_TOWER_ORIGIN).replace(
+    /\/+$/,
+    ''
+  );
+}
+
+export async function callMcpTowerRpc(
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>
+): Promise<unknown> {
+  const url = `${resolveOrigin()}${path.startsWith('/') ? path : `/${path}`}`;
+
   const res = await fetch(url, {
-    method: body ? 'POST' : 'GET',
+    method: body === undefined ? 'GET' : 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Accept': 'application/json',
+      Accept: 'application/json',
       ...(headers || {}),
     },
-    body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(5000), // 5s timeout from functions/_lib/edgeHelpers.ts
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(5000),
   });
 
   if (!res.ok) {
@@ -22,13 +37,20 @@ export async function callMcpTowerRpc(path: string, body?: any, headers?: Record
   return await res.json();
 }
 
-export async function probeMcpTowerHealth() {
+export async function probeMcpTowerHealth(): Promise<
+  { ok: true; duration: number; status: number } | { ok: false; duration: number; error: string }
+> {
+  const startedAt = Date.now();
   try {
-    const start = Date.now();
-    const res = await fetch(`${DEFAULT_MCP_TOWER_ORIGIN}/health`, { signal: AbortSignal.timeout(2500) });
-    const duration = Date.now() - start;
-    return { ok: res.ok, duration, status: res.status };
-  } catch (e) {
-    return { ok: false, duration: 2500, error: e.message };
+    const res = await fetch(`${resolveOrigin()}/health`, {
+      signal: AbortSignal.timeout(2500),
+    });
+    return { ok: true, duration: Date.now() - startedAt, status: res.status };
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      duration: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
