@@ -48,6 +48,7 @@ import {
 } from './src/config/releaseDownloads';
 import QRCode from 'qrcode';
 import { buildOtpAuthUri, generateTotpSecret, verifyTotpToken } from './src/server/totp';
+import { buildDurableAuditRow } from './src/server/auditPayload';
 import {
   loginSchema,
   signupSchema,
@@ -2003,17 +2004,11 @@ async function startServer() {
       auditRecords.length = 200;
     }
     // Best-effort durable audit trail (survives redeploy when Supabase is configured).
-    void supabaseRestRequest('audit_logs', 'POST', [
-      {
-        id: entry.id,
-        actor: entry.actor,
-        action: entry.action,
-        resource: entry.resource,
-        details: entry.details,
-        ip_address: entry.ipAddress,
-        created_at: new Date().toISOString(),
-      },
-    ]).catch(() => {});
+    // NOTE: `audit_logs.id` is a bigint identity column, so the local `entry.id`
+    // (an `audit_<ts>_<rand>` string used only for the in-memory list) must NOT be
+    // sent — Postgres rejects it with 22P02 and the row is never written. The
+    // durable id is assigned by the database.
+    void supabaseRestRequest('audit_logs', 'POST', [buildDurableAuditRow(entry)]).catch(() => {});
   };
 
   let blockedIps: { ip: string; reason: string; date: string }[] = isProduction
@@ -2083,6 +2078,46 @@ async function startServer() {
     }
   };
   void loadPlatformState();
+
+  // Startup schema probe. The durable audit + platform-state writers swallow
+  // errors so they can never break a request, which previously hid the fact
+  // that `platform_settings` did not exist and that `audit_logs` had no
+  // partition covering "now". Surface that drift in the logs instead of
+  // failing silently.
+  const verifyGatewaySchema = async () => {
+    const checks: Array<{ table: string; path: string; requiredColumns: string[] }> = [
+      {
+        table: 'platform_settings',
+        path: 'platform_settings?select=id&limit=1',
+        requiredColumns: ['id', 'value', 'updated_at'],
+      },
+      {
+        table: 'audit_logs',
+        path: 'audit_logs?select=id,actor,action,resource,details,ip_address,created_at&limit=1',
+        requiredColumns: [
+          'id',
+          'actor',
+          'action',
+          'resource',
+          'details',
+          'ip_address',
+          'created_at',
+        ],
+      },
+    ];
+    for (const check of checks) {
+      try {
+        await supabaseRestRequest(check.path, 'GET');
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        console.error(
+          `[schema] ${check.table} is not usable by the gateway (expected columns: ${check.requiredColumns.join(', ')}). ` +
+            `Durable writes to this table will be dropped. Apply supabase/migrations before deploying. Cause: ${detail}`
+        );
+      }
+    }
+  };
+  void verifyGatewaySchema();
 
   // --- User Authentication & Unified Customer Directory ---
   const envAdminEmails = [
