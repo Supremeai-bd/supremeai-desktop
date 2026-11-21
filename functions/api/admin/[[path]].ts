@@ -143,7 +143,13 @@ export async function onRequest(context: PagesContext): Promise<Response> {
   if (path.startsWith('/api/admin/github/')) {
     const repo = incomingUrl.searchParams.get('repo')?.trim() || 'Supremeai-bd/supremeai';
     if (!isSafeGitHubRepoSlug(repo)) {
-      return jsonEdgeResponse({ error: 'Invalid GitHub repository slug.' }, 400, request, undefined, env);
+      return jsonEdgeResponse(
+        { error: 'Invalid GitHub repository slug.' },
+        400,
+        request,
+        undefined,
+        env
+      );
     }
     const token = env?.GITHUB_TOKEN?.trim() || env?.GITHUB_READONLY_TOKEN?.trim() || '';
     const ghHeaders: Record<string, string> = {
@@ -161,9 +167,21 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         );
         const data = (await res.json().catch(() => ({}))) as any;
         const runs = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
-        return jsonEdgeResponse({ runs, tokenConfigured: Boolean(token) }, 200, request, undefined, env);
+        return jsonEdgeResponse(
+          { runs, tokenConfigured: Boolean(token) },
+          200,
+          request,
+          undefined,
+          env
+        );
       } catch {
-        return jsonEdgeResponse({ runs: [], tokenConfigured: Boolean(token) }, 200, request, undefined, env);
+        return jsonEdgeResponse(
+          { runs: [], tokenConfigured: Boolean(token) },
+          200,
+          request,
+          undefined,
+          env
+        );
       }
     }
 
@@ -176,9 +194,21 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         );
         const data = (await res.json().catch(() => [])) as any[];
         const pulls = Array.isArray(data) ? data : [];
-        return jsonEdgeResponse({ pulls, tokenConfigured: Boolean(token) }, 200, request, undefined, env);
+        return jsonEdgeResponse(
+          { pulls, tokenConfigured: Boolean(token) },
+          200,
+          request,
+          undefined,
+          env
+        );
       } catch {
-        return jsonEdgeResponse({ pulls: [], tokenConfigured: Boolean(token) }, 200, request, undefined, env);
+        return jsonEdgeResponse(
+          { pulls: [], tokenConfigured: Boolean(token) },
+          200,
+          request,
+          undefined,
+          env
+        );
       }
     }
   }
